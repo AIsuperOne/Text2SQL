@@ -1,0 +1,136 @@
+﻿序号,question,sql
+1,分省份和频段的5G基站数和小区数统计,"    SELECT 
+        `省份`,
+        frequency_band,
+        COUNT(DISTINCT station_name) AS `5g基站数`,
+        COUNT(DISTINCT cell_name) AS `5g小区数`
+    FROM 
+        btsbase
+    GROUP BY 
+        `省份`, frequency_band"
+2,5G基站总数,"    SELECT 
+        `省份`,
+        COUNT(DISTINCT station_name) AS `5g基站数`
+    FROM 
+        btsbase
+    GROUP BY 
+        `省份`;"
+3,5G小区总数,"    SELECT 
+        `省份`,
+        COUNT(DISTINCT cell_name) AS `5g小区数`
+    FROM 
+        btsbase
+    GROUP BY 
+        `省份`;"
+4,地市为维度的5G基站统计,"    SELECT 
+        `省份`,`地市`,
+        COUNT(DISTINCT station_name) AS `5g基站数`
+    FROM 
+        btsbase
+    GROUP BY 
+        `省份`,`地市`;"
+5,地市为维度的5G小区统计,"    SELECT 
+        `省份`,`地市`,
+        COUNT(DISTINCT cell_name) AS `5g小区数`
+    FROM 
+        btsbase
+    GROUP BY 
+        `省份`,`地市`;"
+6,频段为band28的5G基站数,"SELECT 
+    `省份`,
+    COUNT(DISTINCT `station_name`) AS `5g基站数`
+FROM 
+    `btsbase`
+WHERE 
+    `frequency_band` = 'band28'
+GROUP BY 
+    `省份`
+ORDER BY 
+    `5g基站数` DESC;"
+7,频段为band28的5G基站数,"SELECT 
+    `省份`,
+    COUNT(DISTINCT `station_name`) AS `5g基站数`
+FROM 
+    `btsbase`
+WHERE 
+    `frequency_band` = 'band41'
+GROUP BY 
+    `省份`
+ORDER BY 
+    `5g基站数` DESC;"
+8,频段为band28的5G小区数,"SELECT 
+    `省份`,
+    COUNT(DISTINCT cell_name) AS `5g小区数`
+FROM 
+    `btsbase`
+WHERE 
+    `frequency_band` = 'band28'
+GROUP BY 
+    `省份`
+ORDER BY 
+    `5g基站数` DESC;"
+9,频段为band28的5G小区数,"SELECT 
+    `省份`,
+    COUNT(DISTINCT cell_name) AS `5g小区数`
+FROM 
+    `btsbase`
+WHERE 
+    `frequency_band` = 'band41'
+GROUP BY 
+    `省份`
+ORDER BY 
+    `5g基站数` DESC;"
+11,按照省份、时间和频段统计5G网络价值指标，数据业务四大指标和VONR三大指标；,"    select
+        b.`省份`,k.`开始时间`,b.`frequency_band`,
+        -- 5G网络价值指标
+        SUM(k.R2032_012) / 1e6 AS 下行PDCP层业务流量_GB,
+        SUM(k.R2032_001) / 1e6 AS 上行PDCP层业务流量_GB,
+        (SUM(k.R1012_001) + SUM(k.R1012_002)) / 1e6 AS 总流量_TB,
+        SUM(k.K1009_001) / 4 AS VoNR语音话务量,
+        SUM(k.K1009_002) / 4 AS ViNR视频话务量,
+        
+        -- 数据业务四大指标
+        100 * 
+        (SUM(k.R1001_012) / NULLIF(SUM(k.R1001_001), 0)) *
+        (SUM(k.R1034_012) / NULLIF(SUM(k.R1034_001), 0)) *
+        (SUM(k.R1039_002) / NULLIF(SUM(k.R1039_001), 0)) 
+        AS 无线接通率,
+        
+        100 * 
+        (SUM(k.R1004_003) - SUM(k.R1004_004)) / 
+        NULLIF(SUM(k.R1004_002) + SUM(k.R1004_007) + SUM(k.R1005_012) + SUM(k.R1006_012), 0) 
+        AS 无线掉线率,
+        
+        100 * 
+        SUM(k.R2007_002 + k.R2007_004 + k.R2006_004 + k.R2006_008 + k.R2005_004 + k.R2005_008) /
+        NULLIF(SUM(k.R2007_001 + k.R2007_003 + k.R2006_001 + k.R2006_005 + k.R2005_001 + k.R2005_005), 0) 
+        AS 系统内切换成功率,
+        
+        100 * 
+        SUM(k.R2075_001 + k.R2040_014) / 
+        NULLIF(SUM(k.R2034_033), 0) 
+        AS EPSFallbackVoLTE回落成功率,
+        
+        -- VoNR三大指标
+        100 * 
+        (SUM(k.R1034_013) / NULLIF(SUM(k.R1034_002), 0)) *
+        SUM(k.R1001_018 + k.R1001_015) / 
+        NULLIF(SUM(k.R1001_007 + k.R1001_004), 0) 
+        AS VoNR无线接通率,
+        
+        100 * 
+        SUM(k.R2035_003 - k.R2035_013) / 
+        NULLIF(SUM(k.R2035_003 + k.R2035_026), 0) 
+        AS VoNR语音掉线率,
+        
+        100 * 
+        SUM(k.R2005_063 + k.R2005_067 + k.R2006_071 + k.R2006_075 + k.R2007_036 + k.R2007_040) /
+        NULLIF(SUM(k.R2005_060 + k.R2005_064 + k.R2006_068 + k.R2006_072 + k.R2007_033 + k.R2007_037), 0) 
+        AS VoNR系统内切换成功率
+
+    FROM 
+        btsbase b
+    INNER JOIN 
+        kpibase k ON b.ID = k.ID  -- 假设ID为关联键
+    GROUP BY b.`省份`,k.`开始时间`,b.`frequency_band`
+    order by k.`开始时间`;"
