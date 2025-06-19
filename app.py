@@ -2,7 +2,7 @@ import streamlit as st
 import pandas as pd
 from modules.rag_engine import RAGEngine
 from modules.training_manager import BatchTrainer
-from utils.visualize import auto_visualize
+from utils.plot_executor import PlotExecutor
 
 st.set_page_config(page_title="NL2SQL RAG Demo", layout="wide")
 
@@ -15,6 +15,20 @@ if "trainer" not in st.session_state:
 rag_engine = st.session_state.rag_engine
 trainer = st.session_state.trainer
 
+# 初始化查询相关的session state
+if 'generated_sql' not in st.session_state:
+    st.session_state.generated_sql = ""
+if 'current_question' not in st.session_state:
+    st.session_state.current_question = ""
+if 'query_result' not in st.session_state:
+    st.session_state.query_result = None
+if 'query_error' not in st.session_state:
+    st.session_state.query_error = None
+if 'plot_code' not in st.session_state:
+    st.session_state.plot_code = ""
+if 'plot_result' not in st.session_state:
+    st.session_state.plot_result = None
+
 # 创建标签页
 tabs = st.tabs(["🧑‍💻 自然语言查询", "⚙️ 批量/增量训练"])
 
@@ -25,59 +39,349 @@ with tabs[0]:
     # 添加调试模式开关
     debug_mode = st.checkbox("显示调试信息", value=False)
     
-    # 使用 text_input 而不是 text_area
-    question = st.text_input("请输入您的业务问题", placeholder="如：查询销量最高的前10个商品")
+    # 问题输入区域
+    col1, col2 = st.columns([5, 1])
+    with col1:
+        question = st.text_input("请输入您的业务问题", placeholder="如：查询湖北省的5G基站数量")
+    with col2:
+        st.text("")  # 占位符，对齐按钮
+        generate_button = st.button("生成SQL", type="primary", disabled=not question.strip())
     
-    if st.button("执行查询", type="primary"):
-        if not question.strip():
-            st.warning("请输入问题！")
-        else:
-            with st.spinner("正在推理..."):
+    # 生成SQL
+    if generate_button:
+        with st.spinner("正在生成SQL..."):
+            try:
+                # 保存当前问题
+                st.session_state.current_question = question
+                
+                # 如果开启调试模式，显示中间步骤
+                if debug_mode:
+                    with st.expander("调试信息", expanded=True):
+                        st.write("1. 向量化问题...")
+                        q_embed = rag_engine.embedder.embed(question)
+                        st.write(f"向量维度: {len(q_embed)}")
+                        
+                        st.write("2. 检索文档...")
+                        docs = rag_engine.vector_db.search(q_embed, top_k=5)
+                        st.write(f"检索到 {len(docs)} 个文档")
+                        for i, doc in enumerate(docs[:3]):
+                            st.write(f"文档{i+1}: {doc[:100]}...")
+                
+                # 生成SQL（不执行）
+                result = rag_engine.generate_sql_only(question)
+                st.session_state.generated_sql = result["sql"]
+                st.session_state.query_result = None
+                st.session_state.query_error = None
+                st.session_state.plot_code = ""
+                st.session_state.plot_result = None
+                st.rerun()
+                
+            except Exception as e:
+                st.error(f"SQL生成失败：{str(e)}")
+                if debug_mode:
+                    st.exception(e)
+    
+    # SQL编辑和执行区域
+    if st.session_state.generated_sql:
+        st.divider()
+        st.subheader("SQL编辑与执行")
+        
+        # 显示当前问题
+        st.info(f"当前问题：{st.session_state.current_question}")
+        
+        # SQL编辑器
+        edited_sql = st.text_area(
+            "生成的SQL（可编辑）：",
+            value=st.session_state.generated_sql,
+            height=200,
+            key="sql_editor"
+        )
+        
+        # 操作按钮
+        col1, col2, col3, col4 = st.columns([1, 1, 1, 3])
+        
+        with col1:
+            execute_button = st.button("▶️ 执行SQL", type="secondary")
+        
+        with col2:
+            save_to_training = st.button("💾 保存到训练", type="secondary")
+        
+        with col3:
+            clear_button = st.button("🗑️ 清空", type="secondary")
+        
+        # 执行SQL
+        if execute_button:
+            with st.spinner("正在执行查询..."):
                 try:
-                    # 如果开启调试模式，显示中间步骤
-                    if debug_mode:
-                        with st.expander("调试信息", expanded=True):
-                            st.write("1. 向量化问题...")
-                            q_embed = rag_engine.embedder.embed(question)
-                            st.write(f"向量维度: {len(q_embed)}")
-                            
-                            st.write("2. 检索文档...")
-                            docs = rag_engine.vector_db.search(q_embed, top_k=5)
-                            st.write(f"检索到 {len(docs)} 个文档")
-                            for i, doc in enumerate(docs[:3]):
-                                st.write(f"文档{i+1}: {doc[:100]}...")
-                    
-                    result = rag_engine.ask(question)
-                    
-                    # 显示生成的SQL
-                    st.subheader("生成的SQL查询")
-                    st.code(result["sql"], language="sql")
-                    
-                    # 检查是否有错误
-                    if "error" in result:
-                        st.error(f"执行错误: {result['error']}")
-                    
-                    # 显示查询结果
-                    if result["result"] is not None and not result["result"].empty:
-                        st.subheader("查询结果")
-                        st.dataframe(result["result"])
-                        
-                        # 自动智能可视化
-                        st.subheader("数据可视化")
-                        auto_visualize(result["result"])
-                    elif "error" not in result:
-                        st.info("查询无结果")
-                        
+                    df = rag_engine.db.execute_query(edited_sql)
+                    st.session_state.query_result = df
+                    st.session_state.query_error = None
                 except Exception as e:
-                    st.error(f"系统错误：{str(e)}")
-                    if debug_mode:
-                        st.exception(e)
+                    st.session_state.query_result = None
+                    st.session_state.query_error = str(e)
+        
+        # 保存到训练数据
+        if save_to_training:
+            if st.session_state.current_question and edited_sql:
+                try:
+                    # 创建问答对
+                    qa_pair = {
+                        "question": st.session_state.current_question,
+                        "sql": edited_sql
+                    }
+                    # 训练单个问答对
+                    count = trainer.train_from_qa_pairs([qa_pair])
+                    if count > 0:
+                        st.success(f"✅ 已将问答对保存到训练数据！")
+                        # 显示保存的内容
+                        with st.expander("查看保存的训练数据"):
+                            st.write(f"**问题：** {qa_pair['question']}")
+                            st.code(qa_pair['sql'], language='sql')
+                    else:
+                        st.warning("该问答对可能已存在于训练数据中")
+                except Exception as e:
+                    st.error(f"保存失败：{str(e)}")
+            else:
+                st.warning("请确保有问题和SQL语句")
+        
+        # 清空
+        if clear_button:
+            st.session_state.generated_sql = ""
+            st.session_state.current_question = ""
+            st.session_state.query_result = None
+            st.session_state.query_error = None
+            st.session_state.plot_code = ""
+            st.session_state.plot_result = None
+            st.rerun()
+        
+        # 显示执行结果
+        if st.session_state.query_error:
+            st.error(f"❌ SQL执行错误: {st.session_state.query_error}")
+        
+        if st.session_state.query_result is not None:
+            result_df = st.session_state.query_result
+            if not result_df.empty:
+                st.divider()
+                st.subheader("查询结果")
+                
+                # 结果统计
+                col1, col2, col3 = st.columns(3)
+                with col1:
+                    st.metric("返回行数", len(result_df))
+                with col2:
+                    st.metric("列数", len(result_df.columns))
+                with col3:
+                    # 下载按钮
+                    csv = result_df.to_csv(index=False, encoding='utf-8-sig')
+                    st.download_button(
+                        label="📥 下载CSV",
+                        data=csv,
+                        file_name=f"query_result_{pd.Timestamp.now().strftime('%Y%m%d_%H%M%S')}.csv",
+                        mime="text/csv"
+                    )
+                
+                # 数据表格
+                st.dataframe(result_df, use_container_width=True)
+                
+                # AI 智能作图（使用 pyecharts）
+                st.divider()
+                st.subheader("🤖 AI 智能数据可视化")
+                
+                col1, col2 = st.columns([1, 4])
+                
+                with col1:
+                    if st.button("🎨 生成图表", type="primary"):
+                        with st.spinner("AI正在分析数据并生成图表代码..."):
+                            try:
+                                # 准备数据信息
+                                df_info = f"""
+Shape: {result_df.shape}
+Columns: {list(result_df.columns)}
+Data types:
+{result_df.dtypes.to_string()}
+Numeric columns: {result_df.select_dtypes(include=['number']).columns.tolist()}
+Text columns: {result_df.select_dtypes(include=['object']).columns.tolist()}
+Has time column: {'开始时间' in result_df.columns or '日期' in result_df.columns}
+"""
+                                # 获取样本数据
+                                sample_data = result_df.head(5).to_string()
+                                
+                                # 生成作图代码
+                                plot_code = rag_engine.llm.generate_plot_code(
+                                    df_info,
+                                    st.session_state.current_question,
+                                    sample_data
+                                )
+                                
+                                st.session_state.plot_code = plot_code
+                                st.session_state.plot_result = None
+                                st.rerun()
+                                
+                            except Exception as e:
+                                st.error(f"生成图表代码失败: {str(e)}")
+                
+                # 显示和编辑代码
+                if st.session_state.plot_code:
+                    st.write("**生成的 Pyecharts 代码：**")
+                    
+                    # 可编辑的代码框
+                    edited_code = st.text_area(
+                        "可以编辑代码后运行：",
+                        value=st.session_state.plot_code,
+                        height=300,
+                        key="plot_code_editor"
+                    )
+                    
+                    # 运行按钮（移除了清空代码按钮）
+                    if st.button("▶️ 运行代码", type="secondary"):
+                        with st.spinner("正在生成图表..."):
+                            # 创建执行器
+                            executor = PlotExecutor()
+                            
+                            # 执行代码
+                            result = executor.execute_plot_code(edited_code, result_df)
+                            st.session_state.plot_result = result
+                            
+                            # 直接渲染图表
+                            if result['success']:
+                                st.success("✅ 图表生成成功！")
+                                executor.render_chart(result)
+                            else:
+                                st.error(f"❌ 图表生成失败: {result['error']}")
+                                if 'traceback' in result:
+                                    with st.expander("查看详细错误"):
+                                        st.code(result['traceback'])
+                
+                # Pyecharts 示例
+                with st.expander("📚 Pyecharts 代码示例"):
+                    st.markdown("""
+                    **柱状图示例：**
+                    ```python
+                    chart = (
+                        Bar()
+                        .add_xaxis(df['地市'].tolist())
+                        .add_yaxis("5G基站数", df['5G基站数'].tolist())
+                        .set_global_opts(
+                            title_opts=opts.TitleOpts(title="各地市5G基站数量"),
+                            xaxis_opts=opts.AxisOpts(name="地市", axislabel_opts=opts.LabelOpts(rotate=45)),
+                            yaxis_opts=opts.AxisOpts(name="基站数量"),
+                            datazoom_opts=opts.DataZoomOpts(type_="slider")
+                        )
+                        .set_series_opts(
+                            label_opts=opts.LabelOpts(is_show=True, position="top")
+                        )
+                    )
+                    ```
+                    
+                    **折线图示例：**
+                    ```python
+                    # 处理时间格式
+                    df['时间'] = pd.to_datetime(df['开始时间'])
+                    df = df.sort_values('时间')
+                    
+                    chart = (
+                        Line()
+                        .add_xaxis(df['时间'].dt.strftime('%Y-%m-%d').tolist())
+                        .add_yaxis(
+                            "无线接通率", 
+                            df['无线接通率'].round(2).tolist(),
+                            markpoint_opts=opts.MarkPointOpts(
+                                data=[opts.MarkPointItem(type_="max"), opts.MarkPointItem(type_="min")]
+                            )
+                        )
+                        .set_global_opts(
+                            title_opts=opts.TitleOpts(title="无线接通率趋势"),
+                            xaxis_opts=opts.AxisOpts(name="日期", axislabel_opts=opts.LabelOpts(rotate=45)),
+                            yaxis_opts=opts.AxisOpts(name="接通率(%)", min_=95),
+                            tooltip_opts=opts.TooltipOpts(trigger="axis"),
+                            datazoom_opts=[opts.DataZoomOpts(type_="slider", range_start=0, range_end=100)]
+                        )
+                    )
+                    ```
+                    
+                    **饼图示例：**
+                    ```python
+                    chart = (
+                        Pie()
+                        .add(
+                            "流量占比",
+                            [list(z) for z in zip(df['省份'].tolist(), df['总流量_GB'].tolist())],
+                            radius=["40%", "75%"]
+                        )
+                        .set_global_opts(
+                            title_opts=opts.TitleOpts(title="各省份流量占比"),
+                            legend_opts=opts.LegendOpts(orient="vertical", pos_left="left")
+                        )
+                        .set_series_opts(
+                            label_opts=opts.LabelOpts(formatter="{b}: {c} GB ({d}%)")
+                        )
+                    )
+                    ```
+                    
+                    **多系列折线图：**
+                    ```python
+                    chart = (
+                        Line()
+                        .add_xaxis(df['时间'].dt.strftime('%Y-%m-%d').tolist())
+                        .add_yaxis("无线接通率", df['无线接通率'].round(2).tolist())
+                        .add_yaxis("无线掉线率", df['无线掉线率'].round(2).tolist(), yaxis_index=1)
+                        .extend_axis(
+                            yaxis=opts.AxisOpts(
+                                name="掉线率(%)",
+                                position="right"
+                            )
+                        )
+                        .set_global_opts(
+                            title_opts=opts.TitleOpts(title="网络性能指标趋势"),
+                            tooltip_opts=opts.TooltipOpts(trigger="axis"),
+                            datazoom_opts=[opts.DataZoomOpts()],
+                        )
+                    )
+                    ```
+                    """)
+            else:
+                st.info("查询返回空结果")
+    
+    # SQL模板示例
+    with st.expander("💡 SQL查询示例"):
+        st.markdown("""
+        **常用查询模板：**
+        
+        1. **基站统计**
+        ```sql
+        SELECT b.`省份`, COUNT(DISTINCT b.station_name) AS `5G基站数` 
+        FROM btsbase b 
+        GROUP BY b.`省份`
+        ORDER BY `5G基站数` DESC
+        ```
+        
+        2. **性能指标查询**
+        ```sql
+        SELECT b.`省份`, k.`开始时间`,
+            ROUND(100 * (SUM(k.R1001_012) / NULLIF(SUM(k.R1001_001), 0)), 2) AS `RRC接通率`
+        FROM btsbase b 
+        INNER JOIN kpibase k ON b.ID = k.ID 
+        WHERE b.`省份` = '湖北省'
+        GROUP BY b.`省份`, k.`开始时间`
+        ORDER BY k.`开始时间`
+        ```
+        
+        3. **流量统计**
+        ```sql
+        SELECT b.`地市`, 
+            ROUND(SUM(k.R1012_001 + k.R1012_002) / 1024 / 1024, 2) AS `总流量_GB`
+        FROM btsbase b 
+        INNER JOIN kpibase k ON b.ID = k.ID
+        GROUP BY b.`地市`
+        ORDER BY `总流量_GB` DESC
+        ```
+        """)
 
 # 2. 批量/增量训练界面
 with tabs[1]:
     st.header("批量/增量训练数据上传")
     
-    # 初始化变量 - 这是关键修改！
+    # 初始化变量
     ddl_list = []
     doc_list = []
     qa_pairs = []
@@ -110,7 +414,7 @@ with tabs[1]:
                         # 添加列说明
                         col_docs = []
                         for col in table_info['columns']:
-                            if col.get('COLUMN_COMMENT'):  # 使用 get 方法避免 KeyError
+                            if col.get('COLUMN_COMMENT'):
                                 col_docs.append(f"{col['COLUMN_NAME']}: {col['COLUMN_COMMENT']}")
                         
                         if col_docs:
@@ -125,7 +429,7 @@ with tabs[1]:
                                 sample_doc = f"表{table_info['table_name']}的样例数据: {sample_df.to_string()}"
                                 auto_doc_list.append(sample_doc)
                         except:
-                            pass  # 忽略获取样例数据的错误
+                            pass
                     
                     # 执行训练
                     counts = trainer.train_incremental(auto_ddl_list, auto_doc_list, [])
@@ -145,7 +449,7 @@ with tabs[1]:
     # DDL输入
     st.subheader("1. 导入 DDL 语句")
     ddl_input = st.text_area("每行一个DDL建表语句", height=150, key="ddl_input")
-    if ddl_input:  # 只有在有输入时才处理
+    if ddl_input:
         ddl_list = [x.strip() for x in ddl_input.split('\n') if x.strip()]
         if ddl_list:
             st.info(f"已输入 {len(ddl_list)} 条DDL语句")
@@ -153,7 +457,7 @@ with tabs[1]:
     # 文档输入
     st.subheader("2. 导入业务文档")
     doc_input = st.text_area("每行一段业务文档内容", height=150, key="doc_input")
-    if doc_input:  # 只有在有输入时才处理
+    if doc_input:
         doc_list = [x.strip() for x in doc_input.split('\n') if x.strip()]
         if doc_list:
             st.info(f"已输入 {len(doc_list)} 条文档")
@@ -184,7 +488,7 @@ with tabs[1]:
                 
             if "question" not in df_qa.columns or "sql" not in df_qa.columns:
                 st.error("❌ 文件必须包含 'question' 和 'sql' 两列")
-                qa_pairs = []  # 确保即使出错也有值
+                qa_pairs = []
             else:
                 qa_pairs = df_qa[["question", "sql"]].dropna().to_dict("records")
                 st.success(f"✅ 已读取 {len(qa_pairs)} 条问答对")
@@ -194,7 +498,7 @@ with tabs[1]:
                     st.dataframe(df_qa.head())
         except Exception as e:
             st.error(f"文件读取失败：{str(e)}")
-            qa_pairs = []  # 确保即使出错也有值
+            qa_pairs = []
 
     # 训练选项
     st.divider()
@@ -236,7 +540,7 @@ with tabs[1]:
 with st.sidebar:
     st.title("系统信息")
     st.write("NL2SQL RAG Demo")
-    st.write("基于 Qwen + ChromaDB + MySQL")
+    st.write("基于 Claude + ChromaDB + MySQL")
     
     # 显示系统状态
     st.divider()
@@ -252,26 +556,31 @@ with st.sidebar:
     if st.button("添加测试数据"):
         test_ddl = [
             "CREATE TABLE btsbase (ID INT PRIMARY KEY, station_name VARCHAR(100), cell_name VARCHAR(100), `省份` VARCHAR(50), `地市` VARCHAR(50), frequency_band VARCHAR(20))",
-            "CREATE TABLE kpibase (ID INT PRIMARY KEY, `开始时间` DATETIME, R1001_012 BIGINT, R1001_001 BIGINT, R1034_012 BIGINT, R1034_001 BIGINT, R1039_002 BIGINT, R1039_001 BIGINT, R2032_012 BIGINT, R2032_001 BIGINT, R1012_001 BIGINT, R1012_002 BIGINT, K1009_001 BIGINT, K1009_002 BIGINT)"
+            "CREATE TABLE kpibase (ID INT PRIMARY KEY, `开始时间` DATETIME, R1001_012 BIGINT, R1001_001 BIGINT, R1034_012 BIGINT, R1034_001 BIGINT, R1039_002 BIGINT, R1039_001 BIGINT, R2032_012 BIGINT, R2032_001 BIGINT, R1012_001 BIGINT, R1012_002 BIGINT, K1009_001 BIGINT, K1009_002 BIGINT, R1004_002 BIGINT, R1004_003 BIGINT, R1004_004 BIGINT, R1004_007 BIGINT, R1005_012 BIGINT, R1006_012 BIGINT)"
         ]
         test_docs = [
             "btsbase表包含5G基站的基础信息，包括基站名称、小区名称、省份、地市、频段等",
             "kpibase表包含5G网络的KPI指标数据，包括各种性能计数器的值",
             "无线接通率计算公式：100 * (R1001_012/R1001_001) * (R1034_012/R1034_001) * (R1039_002/R1039_001)",
+            "无线掉线率计算公式：100 * (R1004_003 - R1004_004) / (R1004_002 + R1004_007 + R1005_012 + R1006_012)",
             "5G基站数通过COUNT(DISTINCT station_name)统计，5G小区数通过COUNT(DISTINCT cell_name)统计"
         ]
         test_qa = [
             {
-                "question": "湖北省5G 网络价值指标", 
-                "sql": "select b.`省份`, k.`开始时间`, b.`frequency_band`, SUM(k.R2032_012) / 1e6 as 下行PDCP层业务流量_GB, SUM(k.R2032_001) / 1e6 as 上行PDCP层业务流量_GB, (SUM(k.R1012_001) + SUM(k.R1012_002)) / 1e6 as 总流量_TB, SUM(k.K1009_001) / 4 as VoNR语音话务量, SUM(k.K1009_002) / 4 as ViNR视频话务量 from btsbase b inner join kpibase k on b.ID = k.ID WHERE b.`省份` = '湖北省' group by b.`省份`, k.`开始时间`, b.`frequency_band` order by k.`开始时间`;"
-            },
-            {
-                "question": "湖北省5G 网络性能指标", 
-                "sql": "select b.`省份`, k.`开始时间`, b.`frequency_band`, 100 * (SUM(k.R1001_012) / NULLIF(SUM(k.R1001_001), 0)) * (SUM(k.R1034_012) / NULLIF(SUM(k.R1034_001), 0)) * (SUM(k.R1039_002) / NULLIF(SUM(k.R1039_001), 0)) AS 无线接通率, 100 * (SUM(k.R1004_003) - SUM(k.R1004_004)) / NULLIF(SUM(k.R1004_002) + SUM(k.R1004_007) + SUM(k.R1005_012) + SUM(k.R1006_012), 0) AS 无线掉线率 FROM btsbase b INNER JOIN kpibase k ON b.ID = k.ID WHERE b.`省份` = '湖北省' GROUP BY b.`省份`, k.`开始时间`, b.`frequency_band` order by k.`开始时间`;"
+                "question": "查询湖北省的5G基站数量",
+                "sql": "SELECT '湖北省' AS `省份`, COUNT(DISTINCT station_name) AS `5G基站数` FROM btsbase WHERE `省份` = '湖北省'"
             },
             {
                 "question": "统计各地市的5G基站数量",
-                "sql": "SELECT `地市`, COUNT(DISTINCT station_name) AS `5g基站数` FROM btsbase GROUP BY `地市`;"
+                "sql": "SELECT `地市`, COUNT(DISTINCT station_name) AS `5g基站数` FROM btsbase GROUP BY `地市` ORDER BY `5g基站数` DESC"
+            },
+            {
+                "question": "查询湖北省的网络性能指标",
+                "sql": "SELECT b.`省份`, k.`开始时间`, ROUND(100 * (SUM(k.R1001_012) / NULLIF(SUM(k.R1001_001), 0)) * (SUM(k.R1034_012) / NULLIF(SUM(k.R1034_001), 0)) * (SUM(k.R1039_002) / NULLIF(SUM(k.R1039_001), 0)), 2) AS `无线接通率`, ROUND(100 * (SUM(k.R1004_003) - SUM(k.R1004_004)) / NULLIF(SUM(k.R1004_002) + SUM(k.R1004_007) + SUM(k.R1005_012) + SUM(k.R1006_012), 0), 2) AS `无线掉线率` FROM btsbase b INNER JOIN kpibase k ON b.ID = k.ID WHERE b.`省份` = '湖北省' GROUP BY b.`省份`, k.`开始时间` ORDER BY k.`开始时间`"
+            },
+            {
+                "question": "查询5G网络流量指标",
+                "sql": "SELECT b.`省份`, ROUND(SUM(k.R2032_012) / 1e6, 2) as `下行流量_GB`, ROUND(SUM(k.R2032_001) / 1e6, 2) as `上行流量_GB`, ROUND((SUM(k.R1012_001) + SUM(k.R1012_002)) / 1024 / 1024, 2) as `总流量_GB` FROM btsbase b INNER JOIN kpibase k ON b.ID = k.ID GROUP BY b.`省份` ORDER BY `总流量_GB` DESC"
             }
         ]
         
@@ -286,13 +595,47 @@ with st.sidebar:
     if st.button("查看通信行业示例"):
         with st.expander("示例查询", expanded=True):
             st.write("**Q: 查询湖北省的无线接通率趋势**")
-            st.code("SELECT b.`省份`, k.`开始时间`, 100 * (SUM(k.R1001_012) / NULLIF(SUM(k.R1001_001), 0)) * (SUM(k.R1034_012) / NULLIF(SUM(k.R1034_001), 0)) * (SUM(k.R1039_002) / NULLIF(SUM(k.R1039_001), 0)) AS 无线接通率 FROM btsbase b INNER JOIN kpibase k ON b.ID = k.ID WHERE b.`省份` = '湖北省' GROUP BY b.`省份`, k.`开始时间` ORDER BY k.`开始时间`", language='sql')
+            st.code("""SELECT b.`省份`, k.`开始时间`, 
+    ROUND(100 * (SUM(k.R1001_012) / NULLIF(SUM(k.R1001_001), 0)) * 
+    (SUM(k.R1034_012) / NULLIF(SUM(k.R1034_001), 0)) * 
+    (SUM(k.R1039_002) / NULLIF(SUM(k.R1039_001), 0)), 2) AS `无线接通率`
+FROM btsbase b 
+INNER JOIN kpibase k ON b.ID = k.ID 
+WHERE b.`省份` = '湖北省' 
+GROUP BY b.`省份`, k.`开始时间` 
+ORDER BY k.`开始时间`""", language='sql')
             
             st.write("**Q: 统计各地市的5G基站数量**")
-            st.code("SELECT `地市`, COUNT(DISTINCT station_name) AS `5g基站数` FROM btsbase GROUP BY `地市`;", language='sql')
+            st.code("SELECT `地市`, COUNT(DISTINCT station_name) AS `5g基站数` FROM btsbase GROUP BY `地市` ORDER BY `5g基站数` DESC", language='sql')
             
             st.write("**Q: 查询5G网络流量指标**")
-            st.code("SELECT b.`省份`, SUM(k.R2032_012) / 1e6 as 下行流量_GB, SUM(k.R2032_001) / 1e6 as 上行流量_GB FROM btsbase b INNER JOIN kpibase k ON b.ID = k.ID GROUP BY b.`省份`", language='sql')
+            st.code("""SELECT b.`省份`, 
+    ROUND(SUM(k.R2032_012) / 1e6, 2) as `下行流量_GB`, 
+    ROUND(SUM(k.R2032_001) / 1e6, 2) as `上行流量_GB`,
+    ROUND((SUM(k.R1012_001) + SUM(k.R1012_002)) / 1024 / 1024, 2) as `总流量_GB`
+FROM btsbase b 
+INNER JOIN kpibase k ON b.ID = k.ID 
+GROUP BY b.`省份`
+ORDER BY `总流量_GB` DESC""", language='sql')
+    
+    # 清空向量库功能
+    st.divider()
+    st.subheader("数据库管理")
+    
+    if st.button("🗑️ 清空向量库", type="secondary"):
+        confirm = st.checkbox("确认清空所有训练数据", key="confirm_clear")
+        if confirm:
+            try:
+                trainer.vector_db.clear_all()
+                st.success("向量库已清空！")
+                st.rerun()
+            except Exception as e:
+                st.error(f"清空失败: {str(e)}")
+        else:
+            st.warning("请勾选确认框以清空向量库")
+
+
+
 
 
 

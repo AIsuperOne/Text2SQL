@@ -1,6 +1,6 @@
 import chromadb
 import hashlib
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Tuple
 from config.settings import CHROMA_DB_PATH
 
 class LocalChromaDB:
@@ -35,16 +35,40 @@ class LocalChromaDB:
         )
     
     def search(self, embedding, top_k=5):
-        """向量搜索"""
-        results = self.collection.query(
-            query_embeddings=[embedding],
-            n_results=top_k
-        )
-        
-        # 返回文档列表
-        if results and results.get("documents") and len(results["documents"]) > 0:
-            return results["documents"][0]
-        return []
+        """向量搜索（返回文档列表）"""
+        try:
+            results = self.collection.query(
+                query_embeddings=[embedding],
+                n_results=top_k
+            )
+            
+            # 返回文档列表
+            if results and results.get("documents") and len(results["documents"]) > 0:
+                return results["documents"][0]
+            return []
+        except Exception as e:
+            print(f"搜索失败: {e}")
+            return []
+    
+    def search_with_metadata(self, embedding, top_k=5) -> Tuple[List[str], List[Dict]]:
+        """向量搜索（返回文档和元数据）"""
+        try:
+            results = self.collection.query(
+                query_embeddings=[embedding],
+                n_results=top_k
+            )
+            
+            if results and results.get("documents") and len(results["documents"]) > 0:
+                docs = results["documents"][0]
+                metas = results.get("metadatas", [[]])[0]
+                # 确保返回相同长度的列表
+                if len(metas) < len(docs):
+                    metas.extend([{}] * (len(docs) - len(metas)))
+                return docs, metas
+            return [], []
+        except Exception as e:
+            print(f"搜索失败: {e}")
+            return [], []
 
     def has_document(self, text):
         """基于ID查重"""
@@ -63,6 +87,28 @@ class LocalChromaDB:
             return {"count": count}
         except Exception as e:
             return {"error": str(e)}
+    
+    def clear_all(self):
+        """清空所有数据"""
+        try:
+            # 方法1：删除并重新创建collection
+            self.client.delete_collection("nl2sql")
+            self.collection = self.client.create_collection("nl2sql")
+            print("ChromaDB已清空")
+            return True
+        except Exception as e:
+            print(f"清空ChromaDB失败: {e}")
+            return False
+    
+    def get_all_documents(self):
+        """获取所有文档（用于调试）"""
+        try:
+            results = self.collection.get()
+            return results
+        except Exception as e:
+            print(f"获取文档失败: {e}")
+            return None
+
 
 
 

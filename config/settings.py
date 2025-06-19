@@ -1,9 +1,9 @@
 import os
 
 LLM_CONFIG = {
-    "api_key": os.getenv("DASHSCOPE_API_KEY"),
-    "base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1",
-    "model": "qwen-turbo-latest"
+    "api_key": os.getenv("OP_API_KEY"),
+    "base_url": "https://openrouter.ai/api/v1",
+    "model": "anthropic/claude-opus-4"
 }
 
 EMBEDDING_CONFIG = {
@@ -27,4 +27,5 @@ MYSQL_CONFIG = {
 }
 
 CHROMA_DB_PATH = "./chroma_db"
+
 
