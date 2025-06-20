@@ -97,7 +97,11 @@ class RAGEngine:
 4. Numeric precision: All calculated metrics retain 2 decimal places using ROUND(..., 2)
 5. Default sorting: By time dimension ascending unless user specifies otherwise
 6. Conditional filtering: Build WHERE clause based on user requirements
-
+7. For data traffic, uplink data traffic, and downlink data traffic, the unit is GB. In SQL, use SUM(column)/1e6 or SUM(column)/1024/1024.
+8. If the unit needs to be TB, further divide by 1024 on the basis of GB (i.e., SUM(column)/1e6/1024 or SUM(column)/1024/1024/1024).
+9. Uplink user average rate and downlink user average rate must use Mbps as the unit.
+10. All field names for "traffic" must include the unit (e.g., "_GB" or "_TB") and all field names for "rate" must include the unit "_Mbps".
+11. Only include b.`frequency_band` or any frequency band grouping in SELECT or GROUP BY if the user question explicitly mentions "frequency band", "频段", or similar terms. Otherwise, do NOT group or output by frequency band.
 [Output Requirements]
 Return only pure SQL statement text without any explanations, comments, or Markdown formatting marks.
 

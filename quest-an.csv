@@ -1,44 +1,43 @@
 ﻿序号,question,sql
-1,分省份和频段的5G基站数和小区数统计,"    SELECT 
+1,分省份统计基站数量和小区数量统计,"    SELECT 
         `省份`,
-        frequency_band,
-        COUNT(DISTINCT station_name) AS `5g基站数`,
-        COUNT(DISTINCT cell_name) AS `5g小区数`
+        COUNT(DISTINCT station_name) AS `基站数量`,
+        COUNT(DISTINCT cell_name) AS `小区数量`
     FROM 
         btsbase
     GROUP BY 
-        `省份`, frequency_band"
-2,5G基站总数,"    SELECT 
+        `省份`"
+2,分省份统计基站数量,"    SELECT 
         `省份`,
-        COUNT(DISTINCT station_name) AS `5g基站数`
+        COUNT(DISTINCT station_name) AS `基站数量`
     FROM 
         btsbase
     GROUP BY 
         `省份`;"
-3,5G小区总数,"    SELECT 
+3,分省份统计小区数量,"    SELECT 
         `省份`,
-        COUNT(DISTINCT cell_name) AS `5g小区数`
+        COUNT(DISTINCT cell_name) AS `小区数量`
     FROM 
         btsbase
     GROUP BY 
         `省份`;"
-4,地市为维度的5G基站统计,"    SELECT 
+4,地市为维度的基站数量统计,"    SELECT 
         `省份`,`地市`,
-        COUNT(DISTINCT station_name) AS `5g基站数`
+        COUNT(DISTINCT station_name) AS `基站数量`
     FROM 
         btsbase
     GROUP BY 
         `省份`,`地市`;"
-5,地市为维度的5G小区统计,"    SELECT 
+5,地市为维度的小区数量统计,"    SELECT 
         `省份`,`地市`,
-        COUNT(DISTINCT cell_name) AS `5g小区数`
+        COUNT(DISTINCT cell_name) AS `小区数量`
     FROM 
         btsbase
     GROUP BY 
         `省份`,`地市`;"
-6,频段为band28的5G基站数,"SELECT 
+6,频段为band28的基站数量统计,"SELECT 
     `省份`,
-    COUNT(DISTINCT `station_name`) AS `5g基站数`
+    COUNT(DISTINCT `station_name`) AS `基站数量`
 FROM 
     `btsbase`
 WHERE 
@@ -46,10 +45,10 @@ WHERE
 GROUP BY 
     `省份`
 ORDER BY 
-    `5g基站数` DESC;"
-7,频段为band28的5G基站数,"SELECT 
+    `基站数量` DESC;"
+7,频段为band28的小区数量统计,"SELECT 
     `省份`,
-    COUNT(DISTINCT `station_name`) AS `5g基站数`
+    COUNT(DISTINCT `station_name`) AS `基站数量`
 FROM 
     `btsbase`
 WHERE 
@@ -57,38 +56,23 @@ WHERE
 GROUP BY 
     `省份`
 ORDER BY 
-    `5g基站数` DESC;"
-8,频段为band28的5G小区数,"SELECT 
-    `省份`,
-    COUNT(DISTINCT cell_name) AS `5g小区数`
-FROM 
-    `btsbase`
-WHERE 
-    `frequency_band` = 'band28'
-GROUP BY 
-    `省份`
-ORDER BY 
-    `5g基站数` DESC;"
-9,频段为band28的5G小区数,"SELECT 
-    `省份`,
-    COUNT(DISTINCT cell_name) AS `5g小区数`
-FROM 
-    `btsbase`
-WHERE 
-    `frequency_band` = 'band41'
-GROUP BY 
-    `省份`
-ORDER BY 
-    `5g基站数` DESC;"
-11,按照省份、时间和频段统计5G网络价值指标，数据业务四大指标和VONR三大指标；,"    select
-        b.`省份`,k.`开始时间`,b.`frequency_band`,
-        -- 5G网络价值指标
-        SUM(k.R2032_012) / 1e6 AS 下行PDCP层业务流量_GB,
-        SUM(k.R2032_001) / 1e6 AS 上行PDCP层业务流量_GB,
-        (SUM(k.R1012_001) + SUM(k.R1012_002)) / 1e6 AS 总流量_TB,
+    `基站数量` DESC;"
+,按照省份统计网络价值指标趋势；,"    select
+        b.`省份`,k.`开始时间`,
+        -- 网络价值指标
+        (SUM(k.R1012_001) + SUM(k.R1012_002)) / 1e6 AS 数据业务流量,
+        SUM(k.R2032_012) / 1e6 AS 下行数据业务流量,
+        SUM(k.R2032_001) / 1e6 AS 上行数据业务流量,
         SUM(k.K1009_001) / 4 AS VoNR语音话务量,
-        SUM(k.K1009_002) / 4 AS ViNR视频话务量,
-        
+        SUM(k.K1009_002) / 4 AS ViNR视频话务量
+    FROM 
+        btsbase b
+    INNER JOIN 
+        kpibase k ON b.ID = k.ID  -- 假设ID为关联键
+    GROUP BY b.`省份`,k.`开始时间`
+    order by k.`开始时间`;"
+,按照省份统计数据业务性能指标趋势；,"    select
+        b.`省份`,k.`开始时间`,
         -- 数据业务四大指标
         100 * 
         (SUM(k.R1001_012) / NULLIF(SUM(k.R1001_001), 0)) *
@@ -109,8 +93,15 @@ ORDER BY
         100 * 
         SUM(k.R2075_001 + k.R2040_014) / 
         NULLIF(SUM(k.R2034_033), 0) 
-        AS EPSFallbackVoLTE回落成功率,
-        
+        AS EPSFallbackVoLTE回落成功率
+    FROM 
+        btsbase b
+    INNER JOIN 
+        kpibase k ON b.ID = k.ID  -- 假设ID为关联键
+    GROUP BY b.`省份`,k.`开始时间`
+    order by k.`开始时间`;"
+,按照省份统计VONR业务性能指标趋势；,"    select
+        b.`省份`,k.`开始时间`,
         -- VoNR三大指标
         100 * 
         (SUM(k.R1034_013) / NULLIF(SUM(k.R1034_002), 0)) *
@@ -132,5 +123,5 @@ ORDER BY
         btsbase b
     INNER JOIN 
         kpibase k ON b.ID = k.ID  -- 假设ID为关联键
-    GROUP BY b.`省份`,k.`开始时间`,b.`frequency_band`
+    GROUP BY b.`省份`,k.`开始时间`
     order by k.`开始时间`;"

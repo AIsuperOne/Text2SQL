@@ -42,7 +42,7 @@ with tabs[0]:
     # 问题输入区域
     col1, col2 = st.columns([5, 1])
     with col1:
-        question = st.text_input("请输入您的业务问题", placeholder="如：查询湖北省的5G基站数量")
+        question = st.text_input("请输入您的业务问题", placeholder="如：查询湖北省的基站数量和小区数量")
     with col2:
         st.text("")  # 占位符，对齐按钮
         generate_button = st.button("生成SQL", type="primary", disabled=not question.strip())
@@ -260,9 +260,9 @@ Has time column: {'开始时间' in result_df.columns or '日期' in result_df.c
                     chart = (
                         Bar()
                         .add_xaxis(df['地市'].tolist())
-                        .add_yaxis("5G基站数", df['5G基站数'].tolist())
+                        .add_yaxis("基站数量", df['基站数量'].tolist())
                         .set_global_opts(
-                            title_opts=opts.TitleOpts(title="各地市5G基站数量"),
+                            title_opts=opts.TitleOpts(title="各地市基站数量"),
                             xaxis_opts=opts.AxisOpts(name="地市", axislabel_opts=opts.LabelOpts(rotate=45)),
                             yaxis_opts=opts.AxisOpts(name="基站数量"),
                             datazoom_opts=opts.DataZoomOpts(type_="slider")
@@ -305,7 +305,7 @@ Has time column: {'开始时间' in result_df.columns or '日期' in result_df.c
                         Pie()
                         .add(
                             "流量占比",
-                            [list(z) for z in zip(df['省份'].tolist(), df['总流量_GB'].tolist())],
+                            [list(z) for z in zip(df['省份'].tolist(), df['数据业务流量'].tolist())],
                             radius=["40%", "75%"]
                         )
                         .set_global_opts(
@@ -332,7 +332,7 @@ Has time column: {'开始时间' in result_df.columns or '日期' in result_df.c
                             )
                         )
                         .set_global_opts(
-                            title_opts=opts.TitleOpts(title="网络性能指标趋势"),
+                            title_opts=opts.TitleOpts(title="数据业务网络性能指标趋势"),
                             tooltip_opts=opts.TooltipOpts(trigger="axis"),
                             datazoom_opts=[opts.DataZoomOpts()],
                         )
@@ -349,31 +349,31 @@ Has time column: {'开始时间' in result_df.columns or '日期' in result_df.c
         
         1. **基站统计**
         ```sql
-        SELECT b.`省份`, COUNT(DISTINCT b.station_name) AS `5G基站数` 
+        SELECT b.`省份`, COUNT(DISTINCT b.station_name) AS `基站数量` 
         FROM btsbase b 
         GROUP BY b.`省份`
-        ORDER BY `5G基站数` DESC
+        ORDER BY `基站数量` DESC
         ```
         
         2. **性能指标查询**
         ```sql
-        SELECT b.`省份`, k.`开始时间`,
-            ROUND(100 * (SUM(k.R1001_012) / NULLIF(SUM(k.R1001_001), 0)), 2) AS `RRC接通率`
-        FROM btsbase b 
-        INNER JOIN kpibase k ON b.ID = k.ID 
-        WHERE b.`省份` = '湖北省'
-        GROUP BY b.`省份`, k.`开始时间`
-        ORDER BY k.`开始时间`
+            SELECT b.`省份`, k.`开始时间`,
+                round(100 *  (SUM(k.R1001_012) / NULLIF(SUM(k.R1001_001), 0)) * (SUM(k.R1034_012) / NULLIF(SUM(k.R1034_001), 0)) * (SUM(k.R1039_002) / NULLIF(SUM(k.R1039_001), 0)) ,2)  AS `无线接通率`
+            FROM btsbase b 
+            INNER JOIN kpibase k ON b.ID = k.ID 
+            WHERE b.`省份` = '湖北省'
+            GROUP BY b.`省份`, k.`开始时间`
+            ORDER BY k.`开始时间`
         ```
         
         3. **流量统计**
         ```sql
         SELECT b.`地市`, 
-            ROUND(SUM(k.R1012_001 + k.R1012_002) / 1024 / 1024, 2) AS `总流量_GB`
+            ROUND(SUM(k.R1012_001 + k.R1012_002) / 1024 / 1024, 2) AS `数据业务流量`
         FROM btsbase b 
         INNER JOIN kpibase k ON b.ID = k.ID
         GROUP BY b.`地市`
-        ORDER BY `总流量_GB` DESC
+        ORDER BY `数据业务流量` DESC
         ```
         """)
 
@@ -469,10 +469,10 @@ with tabs[1]:
     with st.expander("查看文件格式要求"):
         st.write("CSV或Excel文件需要包含以下两列：")
         example_df = pd.DataFrame({
-            "question": ["湖北5G网络的5G基站和5G小区数量", "查询各地市的5G基站数"],
+            "question": ["湖北省网络的基站数量和小区数量", "查询各地市的基站数量"],
             "sql": [
-                "SELECT `省份`,COUNT(DISTINCT station_name) AS `5g基站数`, COUNT(DISTINCT cell_name) AS `5g小区数` FROM btsbase WHERE `省份` = '湖北省' GROUP BY `省份`;",
-                "SELECT `地市`, COUNT(DISTINCT station_name) AS `5g基站数` FROM btsbase GROUP BY `地市`;"
+                "SELECT `省份`,COUNT(DISTINCT station_name) AS `基站数量`, COUNT(DISTINCT cell_name) AS `小区数量` FROM btsbase WHERE `省份` = '湖北省' GROUP BY `省份`;",
+                "SELECT `地市`, COUNT(DISTINCT station_name) AS `基站数量` FROM btsbase GROUP BY `地市`;"
             ]
         })
         st.dataframe(example_df)
@@ -563,24 +563,28 @@ with st.sidebar:
             "kpibase表包含5G网络的KPI指标数据，包括各种性能计数器的值",
             "无线接通率计算公式：100 * (R1001_012/R1001_001) * (R1034_012/R1034_001) * (R1039_002/R1039_001)",
             "无线掉线率计算公式：100 * (R1004_003 - R1004_004) / (R1004_002 + R1004_007 + R1005_012 + R1006_012)",
-            "5G基站数通过COUNT(DISTINCT station_name)统计，5G小区数通过COUNT(DISTINCT cell_name)统计"
+            "基站数量通过COUNT(DISTINCT station_name)统计，小区数量通过COUNT(DISTINCT cell_name)统计"
         ]
         test_qa = [
             {
-                "question": "查询湖北省的5G基站数量",
-                "sql": "SELECT '湖北省' AS `省份`, COUNT(DISTINCT station_name) AS `5G基站数` FROM btsbase WHERE `省份` = '湖北省'"
+                "question": "查询湖北省的基站数量",
+                "sql": "SELECT '湖北省' AS `省份`, COUNT(DISTINCT station_name) AS `基站数量` FROM btsbase WHERE `省份` = '湖北省'"
             },
             {
-                "question": "统计各地市的5G基站数量",
-                "sql": "SELECT `地市`, COUNT(DISTINCT station_name) AS `5g基站数` FROM btsbase GROUP BY `地市` ORDER BY `5g基站数` DESC"
+                "question": "统计各地市的基站数量",
+                "sql": "SELECT `地市`, COUNT(DISTINCT station_name) AS `基站数量` FROM btsbase GROUP BY `地市` ORDER BY `基站数量` DESC"
             },
             {
-                "question": "查询湖北省的网络性能指标",
-                "sql": "SELECT b.`省份`, k.`开始时间`, ROUND(100 * (SUM(k.R1001_012) / NULLIF(SUM(k.R1001_001), 0)) * (SUM(k.R1034_012) / NULLIF(SUM(k.R1034_001), 0)) * (SUM(k.R1039_002) / NULLIF(SUM(k.R1039_001), 0)), 2) AS `无线接通率`, ROUND(100 * (SUM(k.R1004_003) - SUM(k.R1004_004)) / NULLIF(SUM(k.R1004_002) + SUM(k.R1004_007) + SUM(k.R1005_012) + SUM(k.R1006_012), 0), 2) AS `无线掉线率` FROM btsbase b INNER JOIN kpibase k ON b.ID = k.ID WHERE b.`省份` = '湖北省' GROUP BY b.`省份`, k.`开始时间` ORDER BY k.`开始时间`"
+                "question": "查询湖北省的数据业务的网络性能指标",
+                "sql": "select b.`省份`, k.`开始时间`, round(100 * (SUM(k.R1001_012) / nullif(SUM(k.R1001_001), 0)) * (SUM(k.R1034_012) / nullif(SUM(k.R1034_001), 0)) * (SUM(k.R1039_002) / nullif(SUM(k.R1039_001), 0)), 2) as 无线接通率, round(100 * (SUM(k.R1004_003) - SUM(k.R1004_004)) / nullif(SUM(k.R1004_002) + SUM(k.R1004_007) + SUM(k.R1005_012) + SUM(k.R1006_012), 0), 2) as 无线掉线率, round(100 * SUM(k.R2007_002 + k.R2007_004 + k.R2006_004 + k.R2006_008 + k.R2005_004 + k.R2005_008) / nullif(SUM(k.R2007_001 + k.R2007_003 + k.R2006_001 + k.R2006_005 + k.R2005_001 + k.R2005_005), 0), 2) as 系统内切换成功率, round(100 * SUM(k.R2075_001 + k.R2040_014) / nullif(SUM(k.R2034_033), 0), 2) as EPSFallbackVoLTE回落成功率 from btsbase b inner join kpibase k on b.ID = k.ID group by b.`省份`, k.`开始时间` order by k.`开始时间`;"
             },
             {
-                "question": "查询5G网络流量指标",
-                "sql": "SELECT b.`省份`, ROUND(SUM(k.R2032_012) / 1e6, 2) as `下行流量_GB`, ROUND(SUM(k.R2032_001) / 1e6, 2) as `上行流量_GB`, ROUND((SUM(k.R1012_001) + SUM(k.R1012_002)) / 1024 / 1024, 2) as `总流量_GB` FROM btsbase b INNER JOIN kpibase k ON b.ID = k.ID GROUP BY b.`省份` ORDER BY `总流量_GB` DESC"
+                "question": "查询湖北省数据业务流量指标",
+                "sql": "select b.`省份`, k.`开始时间`, round((SUM(k.R1012_001) + SUM(k.R1012_002)),2) / 1e6 AS 数据业务流量, round(SUM(k.R2032_012) / 1e6,2) AS 下行数据业务流量, round(SUM(k.R2032_001) / 1e6,2) AS 上行数据业务流量 FROM btsbase b INNER JOIN kpibase k ON b.ID = k.ID GROUP BY b.`省份`, k.`开始时间` order by k.`开始时间`;"
+            },
+            {
+                "question": "查询湖北省的VONR的网络性能指标",
+                "sql": "select b.`省份`, k.`开始时间`, round(100 * (SUM(k.R1034_013) / NULLIF(SUM(k.R1034_002), 0)) * SUM(k.R1001_018 + k.R1001_015) / NULLIF(SUM(k.R1001_007 + k.R1001_004), 0), 2) AS VoNR无线接通率, round(100 * SUM(k.R2035_003 - k.R2035_013) / NULLIF(SUM(k.R2035_003 + k.R2035_026), 0), 2) AS VoNR语音掉线率, round(100 * SUM(k.R2005_063 + k.R2005_067 + k.R2006_071 + k.R2006_075 + k.R2007_036 + k.R2007_040) / NULLIF(SUM(k.R2005_060 + k.R2005_064 + k.R2006_068 + k.R2006_072 + k.R2007_033 + k.R2007_037), 0), 2) AS VoNR系统内切换成功率 FROM btsbase b INNER JOIN kpibase k ON b.ID = k.ID GROUP BY b.`省份`, k.`开始时间` order by k.`开始时间`;"
             }
         ]
         
@@ -605,27 +609,27 @@ WHERE b.`省份` = '湖北省'
 GROUP BY b.`省份`, k.`开始时间` 
 ORDER BY k.`开始时间`""", language='sql')
             
-            st.write("**Q: 统计各地市的5G基站数量**")
-            st.code("SELECT `地市`, COUNT(DISTINCT station_name) AS `5g基站数` FROM btsbase GROUP BY `地市` ORDER BY `5g基站数` DESC", language='sql')
+            st.write("**Q: 统计各地市的基站数量**")
+            st.code("SELECT `地市`, COUNT(DISTINCT station_name) AS `基站数量` FROM btsbase GROUP BY `地市` ORDER BY `基站数量` DESC", language='sql')
             
-            st.write("**Q: 查询5G网络流量指标**")
+            st.write("**Q: 查询数据业务流量指标**")
             st.code("""SELECT b.`省份`, 
-    ROUND(SUM(k.R2032_012) / 1e6, 2) as `下行流量_GB`, 
-    ROUND(SUM(k.R2032_001) / 1e6, 2) as `上行流量_GB`,
-    ROUND((SUM(k.R1012_001) + SUM(k.R1012_002)) / 1024 / 1024, 2) as `总流量_GB`
+    ROUND(SUM(k.R2032_012) / 1e6, 2) as `数据业务下行流量`, 
+    ROUND(SUM(k.R2032_001) / 1e6, 2) as `数据业务上行流量`,
+    ROUND((SUM(k.R1012_001) + SUM(k.R1012_002)) / 1024 / 1024, 2) as `数据业务流量`
 FROM btsbase b 
 INNER JOIN kpibase k ON b.ID = k.ID 
 GROUP BY b.`省份`
-ORDER BY `总流量_GB` DESC""", language='sql')
+ORDER BY `数据业务流量` DESC""", language='sql')
     
     # 清空向量库功能
     st.divider()
     st.subheader("数据库管理")
-    
     if st.button("🗑️ 清空向量库", type="secondary"):
         confirm = st.checkbox("确认清空所有训练数据", key="confirm_clear")
         if confirm:
             try:
+                # 清空向量数据库
                 trainer.vector_db.clear_all()
                 st.success("向量库已清空！")
                 st.rerun()
