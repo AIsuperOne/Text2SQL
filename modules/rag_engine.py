@@ -16,25 +16,23 @@ class RAGEngine:
         self.reranker = QwenReranker()
         self.vector_db = LocalChromaDB()
         self.db = MySQLConnector()
-        
         self.metrics_yaml_path = r"C:\Users\Administrator\PYMo\SuperMO\Text2SQL\all_metrics.yaml"
         self.metrics_definitions = self._load_metrics_definitions(self.metrics_yaml_path)
         self.all_kpi_fields = self._extract_all_kpi_fields()
 
     def _load_metrics_definitions(self, yaml_path):
         if not os.path.exists(yaml_path):
-            print(f"警告: 指标定义文件未找到于 {yaml_path}。")
+            print(f"Warning: Metric definition file not found at {yaml_path}")
             return {}
         try:
             with open(yaml_path, 'r', encoding='utf-8') as f:
                 data = yaml.safe_load(f)
                 return {metric['name']: metric for metric in data.get('metrics', [])}
         except Exception as e:
-            print(f"加载指标定义文件失败: {e}")
+            print(f"Failed to load metric definitions: {e}")
             return {}
 
     def _extract_all_kpi_fields(self):
-        """从所有指标公式中提取K和R开头的字段名"""
         fields = set()
         for metric in self.metrics_definitions.values():
             formula = metric.get('formula', '')
@@ -43,34 +41,48 @@ class RAGEngine:
         return list(fields)
 
     def _find_metrics_in_question(self, question):
-        """从问题中查找并返回相关的指标定义"""
         found_metrics = []
-        # 使用正则表达式查找所有可能的指标名称
-        # 这是一个简化的例子，实际可能需要更复杂的NLP技术
         for name, definition in self.metrics_definitions.items():
-            # 简单的关键词匹配
             if name in question:
                 found_metrics.append(definition)
         return found_metrics
-
+    
     def _validate_sql_fields(self, sql):
-        """验证SQL中的字段是否在允许的列表中"""
         used_fields = set(re.findall(r'k\.([KR]\d{4}_\d{3})', sql))
         allowed_fields = set(self.all_kpi_fields)
         illegal_fields = used_fields - allowed_fields
         if illegal_fields:
-            return f"SQL包含未在指标库中定义的字段: {', '.join(illegal_fields)}"
+            return f"SQL contains undefined fields: {', '.join(illegal_fields)}"
         return None
 
-    def generate_sql_only(self, question):
-        """先润色问题，然后根据问题中的指标动态构建强约束Prompt，最后生成SQL"""
+    def _safe_str(self, obj):
+        if isinstance(obj, str):
+            return obj
+        elif isinstance(obj, dict):
+            if 'document' in obj:
+                return str(obj['document'])
+            elif 'text' in obj:
+                return str(obj['text'])
+            else:
+                return json.dumps(obj, ensure_ascii=False)
+        else:
+            return str(obj)
+
+    def rewrite_question_only(self, question):
+        """只调用LLM对问题进行结构化和逻辑化润色"""
         try:
             print(f"[RAG] LLM结构化问题: {question}")
             structured_question = self.llm.rewrite_question(question)
             print(f"[RAG] 结构化结果: {structured_question}")
+            return {"structured_question": structured_question, "error": None}
+        except Exception as e:
+            print(f"[RAG] 问题润色失败: {e}")
+            return {"structured_question": question, "error": str(e)}
 
+    def generate_sql_only(self, structured_question):
+        """根据润色后的问题生成SQL"""
+        try:
             relevant_metrics = self._find_metrics_in_question(structured_question)
-            
             metric_formulas_context = []
             if relevant_metrics:
                 for metric in relevant_metrics:
@@ -78,10 +90,8 @@ class RAGEngine:
                 print(f"[RAG] 找到了相关的官方公式: {metric_formulas_context}")
             else:
                 print("[RAG] 未在问题中找到明确的指标，将依赖RAG的泛化能力。")
-
             q_embed = self.embedder.embed(structured_question)
             docs, metadatas = self.vector_db.search_with_metadata(q_embed, top_k=10)
-            
             context_parts = []
             sql_examples = []
             for doc, meta in zip(docs, metadatas):
@@ -91,7 +101,6 @@ class RAGEngine:
                     context_parts.append(f"表结构: {doc}")
                 else:
                     context_parts.append(str(doc))
-
             system_prompt = f"""You are an expert MySQL SQL developer. Your task is to generate precise SQL queries from user questions.
 
 [Database Schema]
@@ -128,26 +137,21 @@ Return only the raw SQL query text. No explanations or markdown.
             print("[RAG] 生成SQL...")
             sql = self.llm.generate_sql(system_prompt, structured_question)
             print(f"[RAG] 生成的SQL: {sql}")
-            
-            # SQL后处理和验证
             sql = sql.strip()
             if sql.startswith("```"):
                 sql = sql.split("```")[1].strip()
                 if sql.startswith("sql"):
                     sql = sql[3:].strip()
-            
             validation_error = self._validate_sql_fields(sql)
             if validation_error:
                 print(f"[VALIDATION] SQL验证失败: {validation_error}")
-                # 可以选择返回错误，或者让LLM重新生成
                 return {"sql": sql, "error": validation_error, "structured_question": structured_question}
-
             return {"sql": sql, "structured_question": structured_question}
         except Exception as e:
             print(f"[RAG] SQL生成错误: {str(e)}")
             import traceback
             traceback.print_exc()
-            return {"sql": "-- SQL生成失败", "error": str(e), "structured_question": ""}
+            return {"sql": "-- SQL生成失败", "error": str(e), "structured_question": structured_question}
 
     def ask(self, question):
         """生成SQL并执行"""

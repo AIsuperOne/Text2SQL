@@ -199,7 +199,7 @@ class PlotExecutor:
             """
             
             # 使用 streamlit 的 HTML 组件显示图表
-            components.html(html_code, height=650, width=1500, scrolling=False)
+            components.html(html_code, height=650, scrolling=False)
         else:
             st.error(f"图表渲染失败: {result['error']}")
             if 'traceback' in result:
