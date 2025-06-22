@@ -4,7 +4,6 @@ import os
 
 class ClaudeLLM:
     def __init__(self):
-        # OpenRouter 可能需要额外的配置
         self.client = OpenAI(
             api_key=LLM_CONFIG['api_key'],
             base_url=LLM_CONFIG['base_url'],
@@ -34,75 +33,116 @@ class ClaudeLLM:
         ]
         return self.chat(messages, temperature=0.1, max_tokens=2000)
     
-    # ==================== 新增的 rewrite_question 方法 ====================
-    def rewrite_question(self, user_question, context_info=None):
+    def refine_question(self, question, available_metrics=None):
+        """使用LLM润色和结构化问题
+        
+        Args:
+            question: 用户输入的原始问题
+            available_metrics: 从ChromaDB中获取的可用指标列表
         """
-        利用LLM对用户自然语言问题进行结构化和逻辑化润色
-        返回优化后的结构化业务意图描述
-        """
-        system_prompt = (
-            "You are an expert business analyst. Please rewrite the user's natural language question "
-            "into a structured, logically clear, and concise business intent in Chinese, suitable for machine understanding. "
-            "Preserve all key business information, avoid redundancy. "
-            "If there are filters, aggregation, time/geography/frequency conditions, highlight them explicitly. "
-            "Only output the rephrased structured business problem, do not repeat or explain the original."
-        )
-        if context_info:
-            user_prompt = f"Context: {context_info}\nOriginal question: {user_question}"
-        else:
-            user_prompt = f"Original question: {user_question}"
+        # 构建可用指标的描述
+        metrics_context = ""
+        if available_metrics:
+            metrics_context = f"""
+IMPORTANT: You MUST only use metrics that exist in our database. Available metrics:
+{chr(10).join([f"- {metric}" for metric in available_metrics])}
+
+When the user mentions general terms, map them to specific available metrics:
+- "性能指标" or "网络性能" → Use specific metrics like "无线接通率", "无线掉线率", "系统内切换成功率" etc.
+- "流量" or "流量指标" → Use "数据业务流量", "上行数据业务流量", "下行数据业务流量"
+- "VONR指标" → Use "VoNR无线接通率", "VoNR语音掉线率", "VoNR系统内切换成功率"
+- "质量" → Map to relevant quality metrics from the available list
+
+DO NOT mention any metric that is not in the available metrics list above."""
+
+        system_prompt = f"""You are a query optimization expert for telecom network data analysis. Your task is to refine and structure user questions for SQL generation.
+
+Context: The database contains 5G network data with two main tables:
+- btsbase: Base station information (ID, station_name, cell_name, 省份, 地市, 区县, 乡镇, 村区, frequency_band)
+- kpibase: KPI metrics data (ID, 开始时间, various R* and K* counters for network performance)
+
+{metrics_context}
+
+Rules:
+1. Clarify ambiguous terms:
+   - "基站" refers to base stations (station_name)
+   - "小区" refers to cells (cell_name)
+   - Only use metrics from the available metrics list
+2. When user mentions general performance terms, specify exactly which metrics from the available list
+3. Identify key entities and add proper context
+4. Specify time ranges if mentioned or implied
+5. Add geographic scope if not specified (省份/地市/区县)
+6. Structure the question to be clear and specific
+7. Keep the refined question in Chinese
+8. Make the intent explicit for SQL generation
+
+Examples:
+- Input: "湖北基站数量"
+  Output: "查询湖北省的基站数量，统计不同基站(station_name)的数量"
+  
+- Input: "各地市性能"
+  Output: "查询各地市的无线接通率、无线掉线率等网络性能指标"
+  
+- Input: "流量统计"
+  Output: "统计数据业务流量、上行数据业务流量、下行数据业务流量，单位为GB"
+
+Output: Return ONLY the refined question in Chinese, no explanations."""
+
+        user_prompt = f"Refine this question for SQL generation: {question}"
+        
         messages = [
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_prompt},
         ]
-        structured = self.chat(messages, temperature=0.2, max_tokens=200)
-        return structured.strip()
-    # =====================================================================
+        
+        return self.chat(messages, temperature=0.3, max_tokens=500)
     
-    def generate_plot_code(self, df_info, user_question, query_result_sample, selected_metrics=None):
-        """生成 pyecharts 作图代码，并支持筛选指标"""
-        system_prompt = """
-You are an expert Python data visualization specialist using the Pyecharts library. Your task is to generate a single, complete, and executable Pyecharts code snippet.
+    def generate_plot_code(self, df_info, user_question, query_result_sample):
+        """生成 pyecharts 作图代码"""
+        system_prompt = """You are a Python data visualization expert specializing in pyecharts. Generate pyecharts code for data visualization.
 
-[Environment & Constraints]
-- The data is in a pandas DataFrame named `df`. Do not load or create it.
-- Required objects are pre-imported: `Bar`, `Line`, `Pie`, `opts`, `JsCode`, etc.
-- The final chart object MUST be assigned to the variable `chart`.
-- Output ONLY the Python code, with no explanations or markdown.
+    Rules:
+    1. The dataframe is available as 'df'. DO NOT load or create df.
+    2. Import statements are NOT needed. Available objects: Bar, Line, Pie, Scatter, HeatMap, Grid, opts, JsCode
+    3. Create appropriate chart based on data:
+    - Time series (开始时间/日期): Line chart
+    - Categories (省份/地市): Bar chart  
+    - Percentages/rates: Bar or Line with formatter
+    - Proportions: Pie chart
+    - Multiple series: Multi-line or grouped bar
+    4. MUST assign the final chart object to variable 'chart'
+    5. Use Chinese labels and titles
+    6. NEVER use 'width'/'height' parameter in opts.LabelOpts, opts.AxisOpts, or opts.TitleOpts.
+    7. Only set width/height in chart's init_opts, e.g. Bar(init_opts=opts.InitOpts(width="1400px", height="600px"))
+    8. ALWAYS initialize chart with proper size:
+    ```python
+    # Example with responsive width
+    chart = (
+        Bar(init_opts=opts.InitOpts(width="100%", height="600px"))
+        .add_xaxis(df['category'].tolist())
+        .add_yaxis("series_name", df['value'].tolist())
+        .set_global_opts(
+            title_opts=opts.TitleOpts(title="图表标题"),
+            xaxis_opts=opts.AxisOpts(name="X轴名称", axislabel_opts=opts.LabelOpts(rotate=45)),
+            yaxis_opts=opts.AxisOpts(name="Y轴名称"),
+            tooltip_opts=opts.TooltipOpts(trigger="axis"),
+            datazoom_opts=[opts.DataZoomOpts(type_="slider")],
+            legend_opts=opts.LegendOpts(pos_left="center", pos_top="top")
+        )
+    )
+For time series, convert datetime to string: df['时间'].dt.strftime('%Y-%m-%d') if datetime column
+For many categories (>10), use: axislabel_opts=opts.LabelOpts(rotate=45, interval=0)
+Round numeric values: df['column'].round(2).tolist()
+Use toolbox for additional features: toolbox_opts=opts.ToolboxOpts()
+IMPORTANT:
 
-[Chart Generation Rules]
-1.  **Chart Type Selection**:
-    - For time-series data (e.g., columns named '开始时间', '日期'), use a `Line` chart.
-    - For categorical comparisons (e.g., '省份', '地市'), use a `Bar` chart.
-    - For proportions, use a `Pie` chart.
-    - For comparing multiple metrics, use a multi-line plot or a grouped bar chart.
+ALWAYS use init_opts=opts.InitOpts(width="100%", height="600px") when creating chart
 
-2.  **Chart Configuration (MUST follow)**:
-    - **Initialization**: Always initialize the chart with a responsive width and fixed height: `init_opts=opts.InitOpts(width="100%", height="600px")`.
-    - **Smooth Lines**: For all `Line` charts, make the curves smooth by setting `is_smooth=True`.
-    - **Toolbox**: Always include a toolbox for user interaction: `toolbox_opts=opts.ToolboxOpts(is_show=True)`.
-    - **Data Zoom**: For charts with many data points, add a slider for zooming: `datazoom_opts=[opts.DataZoomOpts(type_="slider")]`.
-    - **Labels & Titles**: Use clear, Chinese labels for titles, axes, and legends.
-    - **Axis Label Rotation**: If x-axis labels are long or numerous (>10), rotate them: `axislabel_opts=opts.LabelOpts(rotate=45)`.
+The final chart object MUST be assigned to 'chart' variable
 
-3.  **Y-Axis Handling (Critical)**:
-    - **Smart Range**: Set the y-axis `min_` and `max_` to make trends visible. The data plot should occupy roughly 3/4 of the chart's height. For example, if data ranges from 99.5 to 99.8, a good range is `min_=99.0, max_=100`.
-    - **Dual Y-Axis**: If plotting two metrics with vastly different scales (e.g., a rate near 100% and another near 0%), you **MUST** use a second Y-axis to prevent overlap. Follow this pattern:
-      ```python
-      # Dual Y-Axis Example
-      line = Line(init_opts=...).add_xaxis(...)
-      line.add_yaxis("Metric A (Left)", ...)
-      bar = Bar().add_xaxis(...) # or another Line()
-      bar.add_yaxis("Metric B (Right)", ...)
-      line.overlap(bar)
-      line.extend_axis(yaxis=opts.AxisOpts(name="Metric B Name", position="right", ...))
-      chart = line
-      ```
+Do NOT use axis_pointer_opts in TooltipOpts
 
-4.  **Metric Selection**:
-    - If a list of `selected_metrics` is provided in the user prompt, you **MUST** plot only those metrics as y-axes.
-"""
-
+Return ONLY Python code, no explanations"""
 
         user_prompt = f"""Create a pyecharts visualization for this data:
 
@@ -113,13 +153,9 @@ Dataframe Info:
 
 Sample Data:
 {query_result_sample}
-"""
-        # 如果用户选择了指标，将其加入Prompt
-        if selected_metrics:
-            user_prompt += f"\nUser has selected the following metrics to plot: {', '.join(selected_metrics)}. You MUST ONLY plot these metrics as y-axes."
 
-        user_prompt += "\nGenerate pyecharts code that creates an appropriate visualization with responsive width.\nRemember to assign the chart to 'chart' variable."
-
+Generate pyecharts code that creates an appropriate visualization with responsive width.
+Remember to assign the chart to 'chart' variable."""
         messages = [
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_prompt},
@@ -133,6 +169,7 @@ Sample Data:
             lines = code.split('\n')
             start_idx = 0
             end_idx = len(lines)
+            
             for i, line in enumerate(lines):
                 if line.strip().startswith("```"):
                     if start_idx == 0:
@@ -140,11 +177,14 @@ Sample Data:
                     else:
                         end_idx = i
                         break
+            
             code = '\n'.join(lines[start_idx:end_idx])
 
         # 额外的代码清理
         code = code.replace('axis_pointer_opts=', 'trigger=')
 
         return code
+
+
 
 

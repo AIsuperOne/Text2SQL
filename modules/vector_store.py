@@ -108,20 +108,22 @@ class LocalChromaDB:
         except Exception as e:
             print(f"获取文档失败: {e}")
             return None
-    def get_formula_by_metric_name(self, metric_name):
-        """
-        严格匹配指标名，返回其公式
-        """
+    
+    def get_all_documents_with_metadata(self):
+        """获取所有文档及其元数据"""
         try:
-            # 通过meta精确查找type=metrics且name完全匹配
-            results = self.collection.get(where={"name": metric_name, "type": "metrics"})
-            if results and results.get("documents") and results.get("metadatas"):
-                for meta in results["metadatas"]:
-                    if meta and "formula" in meta:
-                        return meta["formula"]
+            # 获取collection中的所有文档
+            results = self.collection.get()
+            
+            if results and 'documents' in results and 'metadatas' in results:
+                documents = results['documents']
+                metadatas = results['metadatas']
+                return list(zip(documents, metadatas))
+            else:
+                return []
         except Exception as e:
-            print(f"精准公式检索失败: {e}")
-            return None
+            print(f"获取文档失败: {e}")
+            return []
 
 
 

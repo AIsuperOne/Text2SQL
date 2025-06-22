@@ -1191,3 +1191,23 @@ metrics:
   时间汇总方式: SUM
   网元类型: gNB
   组内分类: 用户自定义
+- name: 基站数量
+  formula:  COUNT(DISTINCT b.`station_name`)
+  description: 基站数量
+  unit: 秒
+  优良标准: /
+  预警标准: /
+  值类型: INT_ROUND
+  时间汇总方式: AVG
+  网元类型: gNB
+  组内分类: 用户自定义
+- name: 小区数量
+  formula:  COUNT(DISTINCT b.`cell_name`) 
+  description: 小区数量
+  unit: 秒
+  优良标准: /
+  预警标准: /
+  值类型: INT_ROUND
+  时间汇总方式: AVG
+  网元类型: gNB
+  组内分类: 用户自定义

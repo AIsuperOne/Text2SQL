@@ -3,8 +3,6 @@ import pandas as pd
 from modules.rag_engine import RAGEngine
 from modules.training_manager import BatchTrainer
 from utils.plot_executor import PlotExecutor
-import base64
-import os
 
 st.set_page_config(page_title="NL2SQL RAG Demo", layout="wide")
 
@@ -18,12 +16,12 @@ rag_engine = st.session_state.rag_engine
 trainer = st.session_state.trainer
 
 # 初始化查询相关的session state
-if 'current_question' not in st.session_state:
-    st.session_state.current_question = ""
-if 'structured_question' not in st.session_state:
-    st.session_state.structured_question = ""
 if 'generated_sql' not in st.session_state:
     st.session_state.generated_sql = ""
+if 'current_question' not in st.session_state:
+    st.session_state.current_question = ""
+if 'refined_question' not in st.session_state:
+    st.session_state.refined_question = ""
 if 'query_result' not in st.session_state:
     st.session_state.query_result = None
 if 'query_error' not in st.session_state:
@@ -40,402 +38,381 @@ tabs = st.tabs(["🧑‍💻 自然语言查询", "⚙️ 批量/增量训练"])
 with tabs[0]:
     st.header("自然语言转SQL查询")
     
+    # 添加调试模式开关
     debug_mode = st.checkbox("显示调试信息", value=False)
     
-    # ==================== 1. 问题输入与润色 ====================
-    st.subheader("Step 1: 输入您的问题")
+    # 创建三个步骤的列
+    col1, col2, col3 = st.columns(3)
     
-    question = st.text_input(
-        "请输入您的业务问题", 
-        placeholder="例如：湖北省十堰市最后一天的数据业务流量大于5，无线掉线率指标从大到小排序TOP10",
-        key="user_question_input"
-    )
-    
-    if st.button("🔍 润色问题", type="primary", disabled=not question.strip()):
-        with st.spinner("AI正在理解并润色您的问题..."):
-            st.session_state.current_question = question
-            result = rag_engine.rewrite_question_only(question)
-            
-            if result.get('error'):
-                st.error(f"问题润色失败: {result['error']}")
-                st.session_state.structured_question = question # 失败则使用原问题
-            else:
-                st.session_state.structured_question = result['structured_question']
-            
-            # 清空后续步骤的状态
-            st.session_state.generated_sql = ""
-            st.session_state.query_result = None
-            st.session_state.query_error = None
-            st.session_state.plot_code = ""
-            st.session_state.plot_result = None
-    
-    # ==================== 2. 润色后问题确认与SQL生成 ====================
-    if st.session_state.structured_question:
-        st.divider()
-        st.subheader("Step 2: 确认意图并生成SQL")
-        
-        edited_structured_question = st.text_area(
-            "AI理解并润色后的问题（可修改）：",
-            value=st.session_state.structured_question,
-            height=100,
-            key="structured_question_editor"
+    # Step 1: 输入问题
+    with col1:
+        st.markdown("### Step 1: 输入问题")
+        question = st.text_area(
+            "请输入您的业务问题",
+            height=150,
+            placeholder="如：查询湖北省的基站数量和小区数量",
+            key="question_input"
         )
         
-        if st.button("生成SQL", disabled=not edited_structured_question.strip()):
-            with st.spinner("正在生成SQL..."):
-                try:
-                    result = rag_engine.generate_sql_only(edited_structured_question)
-                    st.session_state.generated_sql = result["sql"]
-                    st.session_state.structured_question = edited_structured_question
-                    
-                except Exception as e:
-                    st.error(f"SQL生成失败：{str(e)}")
-                    if debug_mode:
-                        st.exception(e)
+        if st.button("润色问题", type="primary", use_container_width=True):
+            if question.strip():
+                with st.spinner("AI正在结构化您的问题..."):
+                    try:
+                        # 从ChromaDB获取可用的指标列表
+                        available_metrics = []
+                        try:
+                            # 获取所有文档的元数据
+                            all_docs = rag_engine.vector_db.get_all_documents_with_metadata()
+                            
+                            # 提取所有type为'metric'或包含指标名称的文档
+                            for doc, metadata in all_docs:
+                                if metadata and metadata.get('type') == 'metric':
+                                    metric_name = metadata.get('name', '')
+                                    if metric_name and metric_name not in available_metrics:
+                                        available_metrics.append(metric_name)
+                                # 也可以从文档内容中提取指标名称
+                                elif '指标' in str(doc) or '率' in str(doc) or '流量' in str(doc):
+                                    # 简单的指标名称提取逻辑
+                                    import re
+                                    # 匹配中文指标名称模式
+                                    pattern = r'([^\s,，。；：""''【】《》（）]+(?:率|量|数|比))'
+                                    matches = re.findall(pattern, str(doc))
+                                    for match in matches:
+                                        if match not in available_metrics and len(match) > 2:
+                                            available_metrics.append(match)
+                        except:
+                            # 如果获取失败，使用默认的常见指标列表
+                            available_metrics = [
+                                "无线接通率", "无线掉线率", "系统内切换成功率",
+                                "数据业务流量", "上行数据业务流量", "下行数据业务流量",
+                                "VoNR无线接通率", "VoNR语音掉线率", "VoNR系统内切换成功率",
+                                "EPSFallbackVoLTE回落成功率", "基站数量", "小区数量"
+                            ]
+                        
+                        # 使用LLM润色问题，传入可用指标列表
+                        refined = rag_engine.llm.refine_question(question.strip(), available_metrics)
+                        st.session_state.refined_question = refined
+                        st.session_state.current_question = question.strip()
+                        
+                        if debug_mode:
+                            with st.expander("查看润色过程"):
+                                st.write("**原始问题：**", question.strip())
+                                st.write("**可用指标：**", ", ".join(available_metrics[:10]) + "..." if len(available_metrics) > 10 else ", ".join(available_metrics))
+                                st.write("**结构化后：**", refined)
+                    except Exception as e:
+                        st.error(f"问题润色失败：{str(e)}")
+                        # 失败时使用原问题
+                        st.session_state.refined_question = question.strip()
+                        st.session_state.current_question = question.strip()
+            else:
+                st.warning("请先输入问题")
 
-    # ==================== 3. SQL编辑与执行 ====================
-    if st.session_state.generated_sql:
-        st.divider()
-        st.subheader("Step 3: 编辑并执行SQL")
+    
+    # Step 2: 确认意图并生成
+    with col2:
+        st.markdown("### Step 2: 确认意图并生成")
         
-        st.info(f"原始问题：{st.session_state.current_question}")
-        st.success(f"润色后问题：{st.session_state.structured_question}")
-        
-        edited_sql = st.text_area(
-            "生成的SQL（可编辑）：",
-            value=st.session_state.generated_sql,
-            height=200,
-            key="sql_editor"
+        # 显示LLM处理后的结构化问题（可编辑）
+        refined_question_display = st.text_area(
+            "结构化后的问题（可编辑）",
+            value=st.session_state.refined_question if st.session_state.refined_question else "",
+            height=150,
+            placeholder="请先在Step 1中输入并润色问题",
+            key="refined_question_editor"
         )
         
-        col1, col2, col3, col4 = st.columns([1, 1, 1, 3])
-        
-        with col1:
-            execute_button = st.button("▶️ 执行SQL", type="secondary")
-        with col2:
-            save_to_training = st.button("💾 保存到训练", type="secondary")
-        with col3:
-            clear_button = st.button("🗑️ 清空", type="secondary")
-        
-        if execute_button:
-            with st.spinner("正在执行查询..."):
-                try:
-                    df = rag_engine.db.execute_query(edited_sql)
-                    st.session_state.query_result = df
-                    st.session_state.query_error = None
-                except Exception as e:
-                    st.session_state.query_result = None
-                    st.session_state.query_error = str(e)
-        
-        if save_to_training:
-            if st.session_state.structured_question and edited_sql:
-                try:
-                    qa_pair = {
-                        "question": st.session_state.structured_question,
-                        "sql": edited_sql
-                    }
-                    count = trainer.train_from_qa_pairs([qa_pair])
-                    if count > 0:
-                        st.success(f"✅ 已将问答对保存到训练数据！")
-                        with st.expander("查看保存的训练数据"):
-                            st.write(f"**问题：** {qa_pair['question']}")
-                            st.code(qa_pair['sql'], language='sql')
-                    else:
-                        st.warning("该问答对可能已存在于训练数据中")
-                except Exception as e:
-                    st.error(f"保存失败：{str(e)}")
+        # 生成SQL按钮
+        if st.button("生成SQL", type="primary", use_container_width=True):
+            if refined_question_display.strip():
+                # 更新当前问题为编辑后的内容
+                st.session_state.current_question = refined_question_display.strip()
+                
+                with st.spinner("正在生成SQL..."):
+                    try:
+                        # 如果开启调试模式，显示中间步骤
+                        if debug_mode:
+                            with st.expander("调试信息", expanded=True):
+                                st.write("1. 向量化问题...")
+                                q_embed = rag_engine.embedder.embed(refined_question_display)
+                                st.write(f"向量维度: {len(q_embed)}")
+                                
+                                st.write("2. 检索文档...")
+                                docs = rag_engine.vector_db.search(q_embed, top_k=5)
+                                st.write(f"检索到 {len(docs)} 个文档")
+                                for i, doc in enumerate(docs[:3]):
+                                    st.write(f"文档{i+1}: {doc[:100]}...")
+                        
+                        # 生成SQL（不执行）
+                        result = rag_engine.generate_sql_only(refined_question_display)
+                        st.session_state.generated_sql = result["sql"]
+                        st.session_state.query_result = None
+                        st.session_state.query_error = None
+                        st.session_state.plot_code = ""
+                        st.session_state.plot_result = None
+                        st.rerun()
+                        
+                    except Exception as e:
+                        st.error(f"SQL生成失败：{str(e)}")
+                        if debug_mode:
+                            st.exception(e)
             else:
-                st.warning("请确保有问题和SQL语句")
+                st.warning("请先输入或编辑问题")
+    
+    # Step 3: 编辑并执行
+    with col3:
+        st.markdown("### Step 3: 编辑并执行")
         
-        if clear_button:
-            st.session_state.generated_sql = ""
-            st.session_state.current_question = ""
-            st.session_state.structured_question = ""
-            st.session_state.query_result = None
-            st.session_state.query_error = None
-            st.session_state.plot_code = ""
-            st.session_state.plot_result = None
-            st.rerun()
-        
-        if st.session_state.query_error:
-            st.error(f"❌ SQL执行错误: {st.session_state.query_error}")
-        
-        if st.session_state.query_result is not None:
-            result_df = st.session_state.query_result
-            if not result_df.empty:
-                st.divider()
-                st.subheader("查询结果")
-                
-                col1, col2, col3 = st.columns(3)
-                with col1:
-                    st.metric("返回行数", len(result_df))
-                with col2:
-                    st.metric("列数", len(result_df.columns))
-                with col3:
-                    csv = result_df.to_csv(index=False, encoding='utf-8-sig')
-                    st.download_button(
-                        label="📥 下载CSV",
-                        data=csv,
-                        file_name=f"query_result_{pd.Timestamp.now().strftime('%Y%m%d_%H%M%S')}.csv",
-                        mime="text/csv"
-                    )
-                
-                st.dataframe(result_df, use_container_width=True)
-                
-                st.divider()
-                st.subheader("🤖 AI 智能数据可视化")
-                
-                numeric_cols = [col for col in result_df.columns if pd.api.types.is_numeric_dtype(result_df[col])]
-                default_metrics = numeric_cols[:2] if len(numeric_cols) > 1 else numeric_cols
-                selected_metrics = st.multiselect(
-                    "请选择要展示的指标（可多选）",
-                    options=numeric_cols,
-                    default=default_metrics
+        if st.session_state.generated_sql:
+            edited_sql = st.text_area(
+                "编辑SQL",
+                value=st.session_state.generated_sql,
+                height=150,
+                key="sql_editor"
+            )
+            
+            # 创建两个按钮的列
+            btn_col1, btn_col2 = st.columns(2)
+            
+            with btn_col1:
+                if st.button("SQL执行", type="primary", use_container_width=True):
+                    with st.spinner("正在执行查询..."):
+                        try:
+                            df = rag_engine.db.execute_query(edited_sql)
+                            st.session_state.query_result = df
+                            st.session_state.query_error = None
+                            st.success("✅ 执行成功")
+                        except Exception as e:
+                            st.session_state.query_result = None
+                            st.session_state.query_error = str(e)
+                            st.error("❌ 执行失败")
+            
+            with btn_col2:
+                if st.button("💾 保存到训练", type="secondary", use_container_width=True):
+                    if st.session_state.current_question and edited_sql:
+                        try:
+                            # 创建问答对
+                            qa_pair = {
+                                "question": st.session_state.current_question,
+                                "sql": edited_sql
+                            }
+                            # 训练单个问答对
+                            count = trainer.train_from_qa_pairs([qa_pair])
+                            if count > 0:
+                                st.success(f"✅ 已将问答对保存到训练数据！")
+                                # 显示保存的内容
+                                with st.expander("查看保存的训练数据"):
+                                    st.write(f"**问题：** {qa_pair['question']}")
+                                    st.code(qa_pair['sql'], language='sql')
+                            else:
+                                st.warning("该问答对可能已存在于训练数据中")
+                        except Exception as e:
+                            st.error(f"保存失败：{str(e)}")
+                    else:
+                        st.warning("请确保有问题和SQL语句")
+        else:
+            st.text_area(
+                "编辑SQL",
+                value="",
+                height=150,
+                disabled=True,
+                key="sql_editor_disabled"
+            )
+            btn_col1, btn_col2 = st.columns(2)
+            with btn_col1:
+                st.button("SQL执行", type="primary", use_container_width=True, disabled=True)
+            with btn_col2:
+                st.button("💾 保存到训练", type="secondary", use_container_width=True, disabled=True)
+    
+    # 显示查询结果
+    if st.session_state.query_result is not None:
+        result_df = st.session_state.query_result
+        if not result_df.empty:
+            st.divider()
+            st.subheader("查询结果")
+            
+            # 结果统计
+            col1, col2, col3 = st.columns(3)
+            with col1:
+                st.metric("返回行数", len(result_df))
+            with col2:
+                st.metric("列数", len(result_df.columns))
+            with col3:
+                # 下载按钮
+                csv = result_df.to_csv(index=False, encoding='utf-8-sig')
+                st.download_button(
+                    label="📥 下载CSV",
+                    data=csv,
+                    file_name=f"query_result_{pd.Timestamp.now().strftime('%Y%m%d_%H%M%S')}.csv",
+                    mime="text/csv"
                 )
-                
-                col1, col2 = st.columns([1, 4])
-                
-                with col1:
-                    if st.button("🎨 生成图表", type="primary", disabled=not selected_metrics):
-                        with st.spinner("AI正在分析数据并生成图表代码..."):
-                            try:
-                                df_info = f"""
+            
+            # 数据表格
+            st.dataframe(result_df, use_container_width=True)
+            
+            # AI 智能作图（使用 pyecharts）
+            st.divider()
+            st.subheader("🤖 AI 智能数据可视化")
+            
+            col1, col2 = st.columns([1, 4])
+            
+            with col1:
+                if st.button("🎨 生成图表", type="primary"):
+                    with st.spinner("AI正在分析数据并生成图表代码..."):
+                        try:
+                            # 准备数据信息
+                            df_info = f"""
 Shape: {result_df.shape}
 Columns: {list(result_df.columns)}
 Data types:
 {result_df.dtypes.to_string()}
+Numeric columns: {result_df.select_dtypes(include=['number']).columns.tolist()}
+Text columns: {result_df.select_dtypes(include=['object']).columns.tolist()}
+Has time column: {'开始时间' in result_df.columns or '日期' in result_df.columns}
 """
-                                sample_data = result_df.head(5).to_string()
-                                plot_code = rag_engine.llm.generate_plot_code(
-                                    df_info,
-                                    st.session_state.structured_question,
-                                    sample_data,
-                                    selected_metrics=selected_metrics
-                                )
-                                
-                                st.session_state.plot_code = plot_code
-                                st.session_state.plot_result = None
-                                st.rerun()
-                                
-                            except Exception as e:
-                                st.error(f"生成图表代码失败: {str(e)}")
-                
-                if st.session_state.plot_code:
-                    st.write("**生成的 Pyecharts 代码：**")
-                    
-                    edited_code = st.text_area(
-                        "可以编辑代码后运行：",
-                        value=st.session_state.plot_code,
-                        height=300,
-                        key="plot_code_editor"
-                    )
-                    
-                    if st.button("▶️ 运行代码", type="secondary"):
-                        with st.spinner("正在生成图表..."):
-                            executor = PlotExecutor()
-                            result = executor.execute_plot_code(edited_code, result_df)
-                            st.session_state.plot_result = result
+                            # 获取样本数据
+                            sample_data = result_df.head(5).to_string()
                             
-                            if result['success']:
-                                st.success("✅ 图表生成成功！")
-                                executor.render_chart(result)
-                            else:
-                                st.error(f"❌ 图表生成失败: {result['error']}")
-                                if 'traceback' in result:
-                                    with st.expander("查看详细错误"):
-                                        st.code(result['traceback'])
+                            # 生成作图代码
+                            plot_code = rag_engine.llm.generate_plot_code(
+                                df_info,
+                                st.session_state.current_question,
+                                sample_data
+                            )
+                            
+                            st.session_state.plot_code = plot_code
+                            st.session_state.plot_result = None
+                            st.rerun()
+                            
+                        except Exception as e:
+                            st.error(f"生成图表代码失败: {str(e)}")
+            
+            # 显示和编辑代码
+            if st.session_state.plot_code:
+                st.write("**生成的 Pyecharts 代码：**")
                 
-                # Pyecharts 示例
-                with st.expander("📚 Pyecharts 代码示例"):
-                    st.markdown("""
-                    **柱状图示例：**
-                    ```python
-                    chart = (
-                        Bar()
-                        .add_xaxis(df['地市'].tolist())
-                        .add_yaxis("基站数量", df['基站数量'].tolist())
-                        .set_global_opts(
-                            title_opts=opts.TitleOpts(title="各地市基站数量"),
-                            xaxis_opts=opts.AxisOpts(name="地市", axislabel_opts=opts.LabelOpts(rotate=45)),
-                            yaxis_opts=opts.AxisOpts(name="基站数量"),
-                            datazoom_opts=opts.DataZoomOpts(type_="slider")
-                        )
-                        .set_series_opts(
-                            label_opts=opts.LabelOpts(is_show=True, position="top")
+                # 可编辑的代码框
+                edited_code = st.text_area(
+                    "可以编辑代码后运行：",
+                    value=st.session_state.plot_code,
+                    height=300,
+                    key="plot_code_editor"
+                )
+                
+                # 运行按钮
+                if st.button("▶️ 运行代码", type="secondary"):
+                    with st.spinner("正在生成图表..."):
+                        # 创建执行器
+                        executor = PlotExecutor()
+                        
+                        # 执行代码
+                        result = executor.execute_plot_code(edited_code, result_df)
+                        st.session_state.plot_result = result
+                        
+                        # 直接渲染图表
+                        if result['success']:
+                            st.success("✅ 图表生成成功！")
+                            executor.render_chart(result)
+                        else:
+                            st.error(f"❌ 图表生成失败: {result['error']}")
+                            if 'traceback' in result:
+                                with st.expander("查看详细错误"):
+                                    st.code(result['traceback'])
+            
+            # Pyecharts 示例
+            with st.expander("📚 Pyecharts 代码示例"):
+                st.markdown("""
+                **柱状图示例：**
+                ```python
+                chart = (
+                    Bar()
+                    .add_xaxis(df['地市'].tolist())
+                    .add_yaxis("基站数量", df['基站数量'].tolist())
+                    .set_global_opts(
+                        title_opts=opts.TitleOpts(title="各地市基站数量"),
+                        xaxis_opts=opts.AxisOpts(name="地市", axislabel_opts=opts.LabelOpts(rotate=45)),
+                        yaxis_opts=opts.AxisOpts(name="基站数量"),
+                        datazoom_opts=opts.DataZoomOpts(type_="slider")
+                    )
+                    .set_series_opts(
+                        label_opts=opts.LabelOpts(is_show=True, position="top")
+                    )
+                )
+                ```
+                
+                **折线图示例：**
+                ```python
+                # 处理时间格式
+                df['时间'] = pd.to_datetime(df['开始时间'])
+                df = df.sort_values('时间')
+                
+                chart = (
+                    Line()
+                    .add_xaxis(df['时间'].dt.strftime('%Y-%m-%d').tolist())
+                    .add_yaxis(
+                        "无线接通率", 
+                        df['无线接通率'].round(2).tolist(),
+                        markpoint_opts=opts.MarkPointOpts(
+                            data=[opts.MarkPointItem(type_="max"), opts.MarkPointItem(type_="min")]
                         )
                     )
-                    ```
-                    
-                    **折线图示例：**
-                    ```python
-                    # 处理时间格式
-                    df['时间'] = pd.to_datetime(df['开始时间'])
-                    df = df.sort_values('时间')
-                    
-                    chart = (
-                        Line()
-                        .add_xaxis(df['时间'].dt.strftime('%Y-%m-%d').tolist())
-                        .add_yaxis(
-                            "无线接通率", 
-                            df['无线接通率'].round(2).tolist(),
-                            markpoint_opts=opts.MarkPointOpts(
-                                data=[opts.MarkPointItem(type_="max"), opts.MarkPointItem(type_="min")]
-                            )
-                        )
-                        .set_global_opts(
-                            title_opts=opts.TitleOpts(title="无线接通率趋势"),
-                            xaxis_opts=opts.AxisOpts(name="日期", axislabel_opts=opts.LabelOpts(rotate=45)),
-                            yaxis_opts=opts.AxisOpts(name="接通率(%)", min_=95),
-                            tooltip_opts=opts.TooltipOpts(trigger="axis"),
-                            datazoom_opts=[opts.DataZoomOpts(type_="slider", range_start=0, range_end=100)],
-                            is_smooth=True,  # 设置为平滑曲线
-                            toolbox_opts=opts.ToolboxOpts(is_show=True)  # 工具箱
+                    .set_global_opts(
+                        title_opts=opts.TitleOpts(title="无线接通率趋势"),
+                        xaxis_opts=opts.AxisOpts(name="日期", axislabel_opts=opts.LabelOpts(rotate=45)),
+                        yaxis_opts=opts.AxisOpts(name="接通率(%)", min_=95),
+                        tooltip_opts=opts.TooltipOpts(trigger="axis"),
+                        datazoom_opts=[opts.DataZoomOpts(type_="slider", range_start=0, range_end=100)]
+                    )
+                )
+                ```
+                
+                **饼图示例：**
+                ```python
+                chart = (
+                    Pie()
+                    .add(
+                        "流量占比",
+                        [list(z) for z in zip(df['省份'].tolist(), df['数据业务流量'].tolist())],
+                        radius=["40%", "75%"]
+                    )
+                    .set_global_opts(
+                        title_opts=opts.TitleOpts(title="各省份流量占比"),
+                        legend_opts=opts.LegendOpts(orient="vertical", pos_left="left")
+                    )
+                    .set_series_opts(
+                        label_opts=opts.LabelOpts(formatter="{b}: {c} GB ({d}%)")
+                    )
+                )
+                ```
+                
+                **多系列折线图：**
+                ```python
+                chart = (
+                    Line()
+                    .add_xaxis(df['时间'].dt.strftime('%Y-%m-%d').tolist())
+                    .add_yaxis("无线接通率", df['无线接通率'].round(2).tolist())
+                    .add_yaxis("无线掉线率", df['无线掉线率'].round(2).tolist(), yaxis_index=1)
+                    .extend_axis(
+                        yaxis=opts.AxisOpts(
+                            name="掉线率(%)",
+                            position="right"
                         )
                     )
-                    ```
-                    
-                    **饼图示例：**
-                    ```python
-                    chart = (
-                        Pie()
-                        .add(
-                            "流量占比",
-                            [list(z) for z in zip(df['省份'].tolist(), df['数据业务流量'].tolist())],
-                            radius=["40%", "75%"]
-                        )
-                        .set_global_opts(
-                            title_opts=opts.TitleOpts(title="各省份流量占比"),
-                            legend_opts=opts.LegendOpts(orient="vertical", pos_left="left")
-                        )
-                        .set_series_opts(
-                            label_opts=opts.LabelOpts(formatter="{b}: {c} GB ({d}%)")
-                        )
+                    .set_global_opts(
+                        title_opts=opts.TitleOpts(title="数据业务网络性能指标趋势"),
+                        tooltip_opts=opts.TooltipOpts(trigger="axis"),
+                        datazoom_opts=[opts.DataZoomOpts()],
                     )
-                    ```
-                                
-                    **双Y轴图表示例 (重要):**
-                    ```python
-                    # 准备X轴数据
-                    x_data = df['开始时间'].dt.strftime('%Y-%m-%d').tolist()
-
-                    # 主Y轴（接通率，范围98-100）
-                    line_chart = (
-                        Line(init_opts=opts.InitOpts(width="1400px", height="600px"))
-                        .add_xaxis(x_data)
-                        .add_yaxis(
-                            "无线接通率",
-                            df['无线接通率'].round(2).tolist(),
-                            is_smooth=True,
-                            label_opts=opts.LabelOpts(is_show=False),
-                        )
-                        .set_global_opts(
-                            title_opts=opts.TitleOpts(title="网络性能指标趋势 (双Y轴)"),
-                            tooltip_opts=opts.TooltipOpts(trigger="axis", axis_pointer_type="cross"),
-                            toolbox_opts=opts.ToolboxOpts(is_show=True),
-                            legend_opts=opts.LegendOpts(pos_left='center'),
-                            yaxis_opts=opts.AxisOpts(
-                                name="接通率 (%)",
-                                min_=98, # 智能设置Y轴范围
-                                max_=100,
-                                axislabel_opts=opts.LabelOpts(formatter="{value} %"),
-                            ),
-                        )
-                        .extend_axis( # 扩展第二个Y轴
-                            yaxis=opts.AxisOpts(
-                                name="掉线率 (%)",
-                                position="right",
-                                min_=0,
-                                max_=1, # 智能设置Y轴范围
-                                axislabel_opts=opts.LabelOpts(formatter="{value} %"),
-                            )
-                        )
-                    )
-
-                    # 次Y轴（掉线率，范围0-1）
-                    bar_chart = (
-                        Line()
-                        .add_xaxis(x_data)
-                        .add_yaxis(
-                            "无线掉线率",
-                            df['无线掉线率'].round(2).tolist(),
-                            yaxis_index=1, # 指定使用第二个Y轴
-                            is_smooth=True,
-                            label_opts=opts.LabelOpts(is_show=False),
-                        )
-                    )
-
-                    # 将两个图表重叠
-                    line_chart.overlap(bar_chart)
-                    chart = line_chart
-                    ```
-                                                    
-                    **多系列折线图：**
-                    ```python
-                    chart = (
-                        Line()
-                        .add_xaxis(df['时间'].dt.strftime('%Y-%m-%d').tolist())
-                        .add_yaxis("无线接通率", df['无线接通率'].round(2).tolist())
-                        .add_yaxis("无线掉线率", df['无线掉线率'].round(2).tolist(), yaxis_index=1)
-                        .extend_axis(
-                            yaxis=opts.AxisOpts(
-                                name="掉线率(%)",
-                                position="right"
-                            )
-                        )
-                        .set_global_opts(
-                            title_opts=opts.TitleOpts(title="数据业务网络性能指标趋势"),
-                            tooltip_opts=opts.TooltipOpts(trigger="axis"),
-                            datazoom_opts=[opts.DataZoomOpts()],
-                            is_smooth=True,  # 设置为平滑曲线
-                            toolbox_opts=opts.ToolboxOpts(is_show=True)  # 工具箱
-                        )
-                    )
-                    ```
-                    """)
-            else:
-                st.info("查询返回空结果")
-    
-    # SQL模板示例
-    with st.expander("💡 SQL查询示例"):
-        st.markdown("""
-        **常用查询模板：**
-        
-        1. **基站统计**
-        ```sql
-        SELECT b.`省份`, COUNT(DISTINCT b.station_name) AS `基站数量` 
-        FROM btsbase b 
-        GROUP BY b.`省份`
-        ORDER BY `基站数量` DESC
-        ```
-        
-        2. **性能指标查询**
-        ```sql
-            SELECT b.`省份`, k.`开始时间`,
-                round(100 *  (SUM(k.R1001_012) / NULLIF(SUM(k.R1001_001), 0)) * (SUM(k.R1034_012) / NULLIF(SUM(k.R1034_001), 0)) * (SUM(k.R1039_002) / NULLIF(SUM(k.R1039_001), 0)) ,2)  AS `无线接通率`
-            FROM btsbase b 
-            INNER JOIN kpibase k ON b.ID = k.ID 
-            WHERE b.`省份` = '湖北省'
-            GROUP BY b.`省份`, k.`开始时间`
-            ORDER BY k.`开始时间`
-        ```
-        
-        3. **流量统计**
-        ```sql
-        SELECT b.`地市`, 
-            ROUND(SUM(k.R1012_001 + k.R1012_002) / 1024 / 1024, 2) AS `数据业务流量`
-        FROM btsbase b 
-        INNER JOIN kpibase k ON b.ID = k.ID
-        GROUP BY b.`地市`
-        ORDER BY `数据业务流量` DESC
-        ```
-        """)
+                )
+                ```
+                """)
+        else:
+            st.info("查询返回空结果")
 
 # 2. 批量/增量训练界面
 with tabs[1]:
     st.header("批量/增量训练数据上传")
     
     # 初始化变量
-    ddl_list = []
     doc_list = []
     qa_pairs = []
     
@@ -499,16 +476,8 @@ with tabs[1]:
     
     st.divider()
 
-    # DDL输入
-    st.subheader("1. 导入 DDL 语句")
-    ddl_input = st.text_area("每行一个DDL建表语句", height=150, key="ddl_input")
-    if ddl_input:
-        ddl_list = [x.strip() for x in ddl_input.split('\n') if x.strip()]
-        if ddl_list:
-            st.info(f"已输入 {len(ddl_list)} 条DDL语句")
-
     # 文档输入
-    st.subheader("2. 导入业务文档")
+    st.subheader("1. 导入业务文档")
     doc_input = st.text_area("每行一段业务文档内容", height=150, key="doc_input")
     if doc_input:
         doc_list = [x.strip() for x in doc_input.split('\n') if x.strip()]
@@ -516,7 +485,7 @@ with tabs[1]:
             st.info(f"已输入 {len(doc_list)} 条文档")
 
     # 问答对文件上传
-    st.subheader("3. 导入SQL问答对")
+    st.subheader("2. 导入SQL问答对")
     
     # 提供示例格式
     with st.expander("查看文件格式要求"):
@@ -558,20 +527,21 @@ with tabs[1]:
     incremental = st.checkbox("仅增量训练（跳过已入库内容）", value=True)
     
     # 显示待训练数据统计
-    total_items = len(ddl_list) + len(doc_list) + len(qa_pairs)
+    total_items = len(doc_list) + len(qa_pairs)
     if total_items > 0:
-        st.info(f"📊 待训练数据统计：DDL {len(ddl_list)}条，文档 {len(doc_list)}条，问答对 {len(qa_pairs)}条")
+        st.info(f"📊 待训练数据统计：文档 {len(doc_list)}条，问答对 {len(qa_pairs)}条")
     
     # 开始训练按钮
     if st.button("🚀 开始训练", type="primary", disabled=(total_items == 0)):
         with st.spinner("训练中，请稍候..."):
             try:
+                # 注意：这里传入空的DDL列表
                 if incremental:
-                    counts = trainer.train_incremental(ddl_list, doc_list, qa_pairs)
-                    st.success(f"✅ 增量训练完成！新增：DDL {counts['ddl']}条，文档 {counts['doc']}条，问答对 {counts['qa']}条")
+                    counts = trainer.train_incremental([], doc_list, qa_pairs)
+                    st.success(f"✅ 增量训练完成！新增：文档 {counts['doc']}条，问答对 {counts['qa']}条")
                 else:
-                    counts = trainer.train_all(ddl_list, doc_list, qa_pairs)
-                    st.success(f"✅ 批量训练完成！成功：DDL {counts['ddl']}条，文档 {counts['doc']}条，问答对 {counts['qa']}条")
+                    counts = trainer.train_all([], doc_list, qa_pairs)
+                    st.success(f"✅ 批量训练完成！成功：文档 {counts['doc']}条，问答对 {counts['qa']}条")
                 
                 # 显示向量库状态
                 try:
@@ -589,7 +559,8 @@ with tabs[1]:
         if st.button("🗑️ 清空输入"):
             st.rerun()
 
-# 侧边栏信息
+
+# 侧边栏信息（保持不变）
 with st.sidebar:
     st.title("系统信息")
     st.write("NL2SQL RAG Demo")
@@ -690,6 +661,10 @@ ORDER BY `数据业务流量` DESC""", language='sql')
                 st.error(f"清空失败: {str(e)}")
         else:
             st.warning("请勾选确认框以清空向量库")
+
+
+
+
 
 
 
