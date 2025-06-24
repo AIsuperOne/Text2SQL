@@ -112,3 +112,171 @@ if len(cat_cols) > 0 and len(num_cols) > 0:
 
 plt.tight_layout()
 """
+# 地图
+@staticmethod
+def map_chart_template():
+    return """
+# 地图呈现
+from pyecharts import options as opts
+from pyecharts.charts import Map
+from pyecharts.globals import ChartType
+
+# 识别地理维度列
+geo_cols = ['省份', '地市', '区县', '乡镇', '村区']
+geo_col = None
+map_type = 'china'
+
+# 找到存在的地理维度列
+for col in geo_cols:
+    if col in df.columns:
+        geo_col = col
+        if col == '省份':
+            map_type = 'china'
+        elif col == '地市':
+            # 需要根据具体省份设置，这里以广东省为例
+            map_type = '广东'
+        break
+
+# 找到数值列（如基站数量、小区数量等）
+num_cols = df.select_dtypes(include=['number']).columns
+
+if geo_col and len(num_cols) > 0:
+    value_col = num_cols[0]
+    
+    # 聚合数据
+    map_data = df.groupby(geo_col)[value_col].sum().reset_index()
+    
+    # 准备地图数据
+    data_list = [(row[geo_col], float(row[value_col])) for _, row in map_data.iterrows()]
+    
+    # 创建地图
+    map_chart = (
+        Map(init_opts=opts.InitOpts(width="1200px", height="800px"))
+        .add(
+            series_name=value_col,
+            data_pair=data_list,
+            maptype=map_type,
+            is_map_symbol_show=False,
+        )
+        .set_series_opts(
+            label_opts=opts.LabelOpts(is_show=True, formatter="{b}: {c}")
+        )
+        .set_global_opts(
+            title_opts=opts.TitleOpts(
+                title=f"{geo_col}{value_col}分布图",
+                subtitle=f"数据范围: {map_data[value_col].min():.0f} - {map_data[value_col].max():.0f}",
+                pos_left="center"
+            ),
+            tooltip_opts=opts.TooltipOpts(
+                trigger="item",
+                formatter="{b}<br/>{a}: {c}"
+            ),
+            visualmap_opts=opts.VisualMapOpts(
+                is_calculable=True,
+                dimension=0,
+                pos_left="10",
+                pos_bottom="10",
+                min_=float(map_data[value_col].min()),
+                max_=float(map_data[value_col].max()),
+                range_text=["高", "低"],
+                text_gap=10,
+                orient="horizontal",
+                is_piecewise=True,
+                pieces=[
+                    {"min": map_data[value_col].quantile(0.8), "label": "高", "color": "#d94e5d"},
+                    {"min": map_data[value_col].quantile(0.6), "max": map_data[value_col].quantile(0.8), 
+                     "label": "较高", "color": "#f57c7c"},
+                    {"min": map_data[value_col].quantile(0.4), "max": map_data[value_col].quantile(0.6), 
+                     "label": "中等", "color": "#ffb980"},
+                    {"min": map_data[value_col].quantile(0.2), "max": map_data[value_col].quantile(0.4), 
+                     "label": "较低", "color": "#ffd9a6"},
+                    {"max": map_data[value_col].quantile(0.2), "label": "低", "color": "#fff2cc"}
+                ]
+            ),
+            legend_opts=opts.LegendOpts(is_show=True, pos_top="5%", pos_right="5%")
+        )
+    )
+    
+    # 渲染地图
+    # 在Jupyter Notebook中显示
+    # map_chart.render_notebook()
+    
+    # 或保存为HTML文件
+    map_chart.render("map_visualization.html")
+    print("地图已保存为: map_visualization.html")
+    
+    # 同时显示数据统计
+    print(f"\\n{geo_col}统计信息:")
+    print(f"总{value_col}: {map_data[value_col].sum():.0f}")
+    print(f"平均{value_col}: {map_data[value_col].mean():.2f}")
+    print(f"\\nTop 10 {geo_col}:")
+    print(map_data.nlargest(10, value_col).to_string(index=False))
+"""
+
+@staticmethod
+def heatmap_template():
+    return """
+# 热力地图（适用于更细粒度的地理数据）
+from pyecharts import options as opts
+from pyecharts.charts import Geo
+from pyecharts.globals import ChartType, SymbolType
+
+# 假设数据中有经纬度信息
+if '经度' in df.columns and '纬度' in df.columns:
+    # 找到数值列
+    num_cols = df.select_dtypes(include=['number']).columns
+    value_cols = [col for col in num_cols if col not in ['经度', '纬度']]
+    
+    if value_cols:
+        value_col = value_cols[0]
+        
+        # 准备热力图数据
+        geo_data = []
+        for _, row in df.iterrows():
+            if pd.notna(row['经度']) and pd.notna(row['纬度']):
+                # 如果有地点名称
+                name = row.get('名称', f"点_{_}")
+                geo_data.append((name, float(row[value_col])))
+        
+        # 创建地理坐标图
+        geo_chart = (
+            Geo(init_opts=opts.InitOpts(width="1200px", height="800px"))
+            .add_schema(
+                maptype="china",
+                itemstyle_opts=opts.ItemStyleOpts(color="#323c48", border_color="#111"),
+                emphasis_itemstyle_opts=opts.ItemStyleOpts(color="#2a333d")
+            )
+            .add(
+                series_name=value_col,
+                data_pair=geo_data,
+                type_=ChartType.HEATMAP,
+                symbol_size=12,
+                effect_opts=opts.EffectOpts(is_show=True),
+            )
+            .set_series_opts(
+                label_opts=opts.LabelOpts(is_show=False)
+            )
+            .set_global_opts(
+                title_opts=opts.TitleOpts(
+                    title=f"{value_col}热力分布图",
+                    pos_left="center"
+                ),
+                visualmap_opts=opts.VisualMapOpts(
+                    is_calculable=True,
+                    min_=float(df[value_col].min()),
+                    max_=float(df[value_col].max()),
+                    range_text=["高", "低"],
+                    pos_left="10",
+                    pos_bottom="10"
+                ),
+                tooltip_opts=opts.TooltipOpts(
+                    trigger="item",
+                    formatter="{b}: {c}"
+                )
+            )
+        )
+        
+        # 渲染热力图
+        geo_chart.render("heatmap_visualization.html")
+        print("热力图已保存为: heatmap_visualization.html")
+"""
